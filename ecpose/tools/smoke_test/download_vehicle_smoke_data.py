@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Download five public COCO images and create tiny COCO keypoint annotations.
+"""Download three public COCO images and create tiny 31-keypoint annotations.
 
 The annotations are deterministic pseudo-labels (a centered vehicle-like box with
-four corner landmarks). They exercise the complete training/evaluation pipeline;
+31 vehicle landmarks). They exercise the complete training/evaluation pipeline;
 they are not intended to measure model accuracy.
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 
-IMAGE_IDS = [397133, 37777, 252219, 87038, 174482]
+IMAGE_IDS = [397133, 37777, 252219]
 BASE_URL = "https://images.cocodataset.org/val2017/{filename}"
 
 
@@ -39,21 +39,17 @@ def download(url: str, destination: Path, retries: int = 3) -> None:
 def make_annotation(image_id: int, width: int, height: int) -> dict:
     box_w, box_h = width * 0.6, height * 0.45
     x, y = (width - box_w) / 2, (height - box_h) / 2
-    inset_x, inset_y = box_w * 0.12, box_h * 0.18
-    keypoints = [
-        x + inset_x, y + inset_y, 2,
-        x + box_w - inset_x, y + inset_y, 2,
-        x + box_w - inset_x, y + box_h - inset_y, 2,
-        x + inset_x, y + box_h - inset_y, 2,
-    ]
+    # Deterministic points distributed inside the box. Visibility 2 means
+    # labelled and visible in the COCO x,y,v convention.
+    keypoints = []
+    for index in range(31):
+        column, row = index % 8, index // 8
+        keypoints.extend([x + box_w * (0.08 + column * 0.12),
+                          y + box_h * (0.12 + row * 0.24), 2])
     return {
-        "id": image_id,
-        "image_id": image_id,
-        "category_id": 0,
+        "id": image_id, "image_id": image_id, "category_id": 0,
         "bbox": [round(x, 2), round(y, 2), round(box_w, 2), round(box_h, 2)],
-        "area": round(box_w * box_h, 2),
-        "iscrowd": 0,
-        "num_keypoints": 4,
+        "area": round(box_w * box_h, 2), "iscrowd": 0, "num_keypoints": 31,
         "keypoints": [round(value, 2) if index % 3 != 2 else int(value)
                       for index, value in enumerate(keypoints)],
     }
@@ -97,7 +93,7 @@ def build_dataset(root: Path, strict_download: bool = False) -> None:
         print(f"ready: {image_path} ({width}x{height})")
 
     dataset = {
-        "info": {"description": "EdgeCrafter five-image smoke-test dataset"},
+        "info": {"description": "EdgeCrafter three-image 31-keypoint smoke-test dataset"},
         "licenses": [],
         "images": images,
         "annotations": annotations,
@@ -105,8 +101,8 @@ def build_dataset(root: Path, strict_download: bool = False) -> None:
             "id": 0,
             "name": "vehicle",
             "supercategory": "vehicle",
-            "keypoints": ["front_left", "front_right", "rear_right", "rear_left"],
-            "skeleton": [[1, 2], [2, 3], [3, 4], [4, 1]],
+            "keypoints": ['front_window_edge_right', 'front_window_edge_left', 'front_light_left', 'front_light_right', 'front_windshield_up_left', 'front_windshield_up_right', 'front_central_up_left', 'front_central_up_right', 'front_low_left', 'front_low_right', 'front_plate_right', 'front_plate_left', 'rear_light_left', 'rear_light_right', 'rear_windshield_up_left', 'rear_windshield_up_right', 'rear_plate_right', 'rear_plate_left', 'rear_low_left', 'rear_low_right', 'front_windshield_low_right', 'front_windshield_low_left', 'front_up_right', 'front_up_left', 'rear_up_right', 'rear_up_left', 'front_wheel_left', 'front_wheel_right', 'rear_wheel_left', 'rear_wheel_right', 'rear_seat_end'],
+            "skeleton": [],
         }],
     }
     for split in ("train", "val"):

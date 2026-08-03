@@ -39,14 +39,14 @@ DETRTransformer:
   dim_feedforward: 128
   num_decoder_layers: 2
   num_queries: 5
-  num_body_points: 4
+  num_body_points: 31
   dec_pred_bbox_embed_share: False
   reg_max: 8
 
 DETRPoseCriterion:
   num_classes: 1
-  num_body_points: 4
-  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
+  num_body_points: 31
+  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
   weight_dict: {loss_vfl: 2.0, loss_bbox: 5.0, loss_giou: 2.0, loss_keypoints: 10.0, loss_oks: 4.0}
   losses: ['vfl', 'boxes', 'keypoints']
   matcher:
@@ -57,12 +57,12 @@ DETRPoseCriterion:
     cost_keypoints: 10.0
     cost_oks: 4.0
     focal_alpha: 0.25
-    num_body_points: 4
-    keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
+    num_body_points: 31
+    keypoint_sigmas: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
 DETRPosePostProcessor:
   num_select: 5
-  num_body_points: 4
+  num_body_points: 31
 
 optimizer:
   type: AdamW
@@ -86,7 +86,7 @@ train_dataloader:
   dataset:
     img_folder: smoke_data/images
     ann_file: smoke_data/annotations/train.json
-    num_keypoints: 4
+    num_keypoints: 31
     transforms:
       ops:
         - {type: Resize, size: [128, 128]}
@@ -106,7 +106,7 @@ val_dataloader:
   dataset:
     img_folder: smoke_data/images
     ann_file: smoke_data/annotations/val.json
-    num_keypoints: 4
+    num_keypoints: 31
     transforms:
       ops:
         - {type: Resize, size: [128, 128]}

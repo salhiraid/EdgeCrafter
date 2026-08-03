@@ -79,15 +79,43 @@ Use the same format as COCO keypoints and adapt `configs/dataset/coco_pose.yml`:
 - keep `task: pose`
 - adjust `num_classes` and remapping behavior if needed
 
-### Vehicle Bounding Boxes + Keypoints
+### Vehicle Bounding Boxes + 31 Keypoints
 
-[`configs/ecvehicle/ecvehicle_s.yml`](./configs/ecvehicle/ecvehicle_s.yml) is a
-four-keypoint example that jointly trains vehicle classification, bounding-box
-regression, and keypoint regression. Update the image/annotation paths and
-taxonomy in
+The joint ECDet/ECPose variants are available in all four sizes:
+`configs/ecvehicle/ecvehicle_{s,m,l,x}.yml`. They share the EC backbone and
+decoder and train three heads end-to-end: vehicle classification (VFL), an
+independent bounding-box head (L1 + GIoU), and the 31-point pose head (visible
+point L1 + OKS). Update the image/annotation paths and taxonomy in
 [`configs/dataset/vehicle_keypoints.yml`](./configs/dataset/vehicle_keypoints.yml),
-and keep every `num_keypoints` / `num_body_points` value equal to the number of
-landmarks in each COCO annotation.
+then set `num_classes` in both that file and `DETRPoseCriterion`. Category IDs
+must be contiguous and zero-based (`car=0`, `bus=1`, etc.). Every annotation
+contains 93 values in COCO order, `[x0,y0,v0,...,x30,y30,v30]`, where visibility
+is 0 (not labelled), 1 (labelled/occluded), or 2 (labelled/visible).
+
+All classes can use the full layout. To configure a subset for a vehicle class,
+set `category_keypoint_indices` on both train and validation datasets. Missing
+points are masked to `(0,0,0)` and do not contribute to keypoint matching or
+losses. For example: `{0: [0,1,...,30], 1: [0,1,2,3,26,27]}`. The canonical
+order is:
+
+```text
+ 0 front_window_edge_right       1 front_window_edge_left
+ 2 front_light_left              3 front_light_right
+ 4 front_windshield_up_left      5 front_windshield_up_right
+ 6 front_central_up_left         7 front_central_up_right
+ 8 front_low_left                9 front_low_right
+10 front_plate_right            11 front_plate_left
+12 rear_light_left              13 rear_light_right
+14 rear_windshield_up_left      15 rear_windshield_up_right
+16 rear_plate_right             17 rear_plate_left
+18 rear_low_left                19 rear_low_right
+20 front_windshield_low_right   21 front_windshield_low_left
+22 front_up_right               23 front_up_left
+24 rear_up_right                25 rear_up_left
+26 front_wheel_left             27 front_wheel_right
+28 rear_wheel_left              29 rear_wheel_right
+30 rear_seat_end
+```
 
 Unlike deriving a box from the minimum and maximum keypoint coordinates, this
 configuration uses an independent learnable bbox branch on each decoder layer.
@@ -102,21 +130,28 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
   train.py -c configs/ecvehicle/ecvehicle_s.yml --test-only -r /path/to/model.pth
 ```
 
-#### Five-image smoke test
+#### Three-image smoke test
 
-Run the complete download → train → evaluate → log workflow on five public
-COCO images with deterministic pseudo vehicle annotations:
+Run the complete generate → train → evaluate → log workflow on three images
+with deterministic pseudo vehicle annotations:
 
 ```bash
 cd ecpose
 python tools/smoke_test/run_vehicle_smoke_test.py --device cpu
 ```
 
+To use your own three images and one COCO JSON instead, run:
+
+```bash
+python tools/smoke_test/run_vehicle_smoke_test.py --device cpu \
+  --images /path/to/three/images --annotations /path/to/annotations.json
+```
+
 The smoke test uses a deliberately small two-block backbone, 128×128 inputs,
-five object queries, and one epoch. It validates the pipeline; its synthetic
+five object queries, 31 keypoints, and one epoch. It validates the pipeline; its synthetic
 annotations and metrics are **not** an accuracy benchmark. Use `--device cuda:0`
 for a GPU run, or `--skip-download` to reuse `smoke_data/`. If the COCO image
-host is unavailable, the downloader creates five deterministic local fallback
+host is unavailable, the downloader creates three deterministic local fallback
 images; pass `--strict-download` directly to the downloader to disable fallback.
 
 Artifacts are written under `outputs/ecvehicle_smoke/`:
