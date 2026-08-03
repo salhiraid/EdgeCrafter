@@ -1,0 +1,38 @@
+task: detection
+num_classes: 1
+remap_mscoco_category: False
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', 'keypoints']
+  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: /path/to/vehicle/train/images
+    ann_file: /path/to/vehicle/train/annotations.json
+    return_masks: False
+    num_keypoints: 31
+    transforms: {type: Compose, ops: ~}
+  shuffle: True
+  num_workers: 4
+  total_batch_size: 16
+  drop_last: True
+  collate_fn: {type: BatchImageCollateFunction}
+
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: /path/to/vehicle/val/images
+    ann_file: /path/to/vehicle/val/annotations.json
+    return_masks: False
+    num_keypoints: 31
+    transforms: {type: Compose, ops: ~}
+  shuffle: False
+  num_workers: 4
+  total_batch_size: 16
+  drop_last: False
+  collate_fn: {type: BatchImageCollateFunction}

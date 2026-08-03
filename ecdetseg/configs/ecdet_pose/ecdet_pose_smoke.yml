@@ -1,0 +1,31 @@
+__include__: ['ecdet_pose_s.yml']
+output_dir: outputs/ecdet_pose_smoke
+epochs: 1
+print_freq: 1
+use_amp: False
+use_ema: False
+sync_bn: False
+eval_spatial_size: [128, 128]
+ViTAdapter: {embed_dim: 64, depth: 2, num_heads: 4, interaction_indexes: [0, 1], skip_load_backbone: True}
+HybridEncoder: {in_channels: [64, 64, 64], hidden_dim: 64, dim_feedforward: 128, nhead: 4, depth_mult: 0.34, expansion: 0.25}
+DETRTransformer: {hidden_dim: 64, nhead: 4, dim_feedforward: 128, num_decoder_layers: 2, num_queries: 5, reg_max: 8}
+DETRPosePostProcessor: {num_select: 5}
+train_dataloader:
+  total_batch_size: 1
+  num_workers: 0
+  dataset:
+    transforms:
+      ops:
+        - {type: PoseResize, size: [128, 128]}
+        - {type: PoseToTensor}
+        - {type: PoseNormalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+      stop_epoch: 1
+val_dataloader:
+  total_batch_size: 1
+  num_workers: 0
+  dataset:
+    transforms:
+      ops:
+        - {type: PoseResize, size: [128, 128]}
+        - {type: PoseToTensor}
+        - {type: PoseNormalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
