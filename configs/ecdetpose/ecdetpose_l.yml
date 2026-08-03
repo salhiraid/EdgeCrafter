@@ -1,3 +1,0 @@
-__include__: [
-  '../../ecdetseg/configs/ecdetpose/ecdetpose_l.yml',
-]
