@@ -31,10 +31,11 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
     __inject__ = ['transforms', ]
     __share__ = ['remap_mscoco_category']
 
-    def __init__(self, img_folder, ann_file, transforms, return_masks=False, remap_mscoco_category=False):
+    def __init__(self, img_folder, ann_file, transforms, return_masks=False,
+                 remap_mscoco_category=False, num_keypoints=None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
-        self.prepare = ConvertCocoPolysToMask(return_masks)
+        self.prepare = ConvertCocoPolysToMask(return_masks, num_keypoints)
         self.img_folder = img_folder
         self.ann_file = ann_file
         self.return_masks = return_masks
@@ -111,8 +112,9 @@ def convert_coco_poly_to_mask(segmentations, height, width):
 
 
 class ConvertCocoPolysToMask(object):
-    def __init__(self, return_masks=False):
+    def __init__(self, return_masks=False, num_keypoints=None):
         self.return_masks = return_masks
+        self.num_keypoints = num_keypoints
 
     def __call__(self, image: Image.Image, target, **kwargs):
         w, h = image.size
@@ -145,6 +147,19 @@ class ConvertCocoPolysToMask(object):
 
         keypoints = None
         if anno and "keypoints" in anno[0]:
+            if self.num_keypoints is not None:
+                expected = self.num_keypoints * 3
+                for obj in anno:
+                    if len(obj.get("keypoints", [])) != expected:
+                        raise ValueError(
+                            f"Annotation {obj.get('id')} must contain {expected} "
+                            f"x,y,visibility values for {self.num_keypoints} keypoints"
+                        )
+                    invalid = set(obj["keypoints"][2::3]) - {0, 1, 2}
+                    if invalid:
+                        raise ValueError(
+                            f"Annotation {obj.get('id')} has invalid visibility values: {invalid}"
+                        )
             keypoints = [obj["keypoints"] for obj in anno]
             keypoints = torch.as_tensor(keypoints, dtype=torch.float32)
             num_keypoints = keypoints.shape[0]

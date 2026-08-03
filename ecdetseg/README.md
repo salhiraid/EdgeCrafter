@@ -61,6 +61,65 @@ python tools/inference/torch_inf.py -c configs/ecdet/ecdet_l.yml -r ecdet_l.pth 
 
 ## 📁 Dataset Preparation
 
+### Optional ECDet vehicle keypoints
+
+ECDet can now keep its distilled backbone and hybrid encoder unchanged while
+selecting either the original box decoder or the structured ECPose decoder:
+
+* `configs/ecdet/ecdet_{s,m,l,x}.yml`: normal detection only.
+* `configs/ecdet_pose/ecdet_pose_{s,m,l,x}.yml`: joint vehicle boxes and 31
+  keypoints.
+
+The pose option sets `ECDet.with_keypoints: true` and replaces only the decoder,
+criterion, and postprocessor. Each object query contains an instance token plus
+31 keypoint tokens. Matching remains instance-level and the objective combines
+Varifocal classification, box L1/GIoU, visible-keypoint L1, and OKS losses. The
+annotation format is COCO keypoints: 31 consecutive `x, y, visibility` triples,
+where visibility is 0 (unlabelled), 1 (labelled but occluded), or 2 (visible).
+
+Set the image and JSON paths, along with the number of zero-based vehicle
+classes, in `configs/dataset/vehicle_keypoints.yml`, then train any size:
+
+```bash
+python train.py -c configs/ecdet_pose/ecdet_pose_s.yml --use-amp
+```
+
+For a one-epoch test using exactly three images and one annotation JSON:
+
+```bash
+python tools/smoke_test/run_vehicle_pose_smoke_test.py \
+  --images /path/to/images --annotations /path/to/annotations.json --device cpu
+```
+
+Omit `--images` and `--annotations` to create deterministic demonstration data.
+
+#### Test inference for all four model sizes
+
+Use the all-size inference test after training S/M/L/X joint checkpoints. It
+asserts that each config selects the correct backbone, loads the checkpoint
+strictly, checks output schemas and finite values, and verifies predicted boxes
+against the COCO ground-truth boxes using IoU:
+
+```bash
+python tools/smoke_test/test_all_vehicle_pose_models.py \
+  --images /path/to/images \
+  --annotations /path/to/annotations.json \
+  --checkpoint-dir /path/to/checkpoints \
+  --device cuda:0 --score-threshold 0.25 --min-box-iou 0.3
+```
+
+The checkpoint directory must contain `ecdet_pose_s.pth`,
+`ecdet_pose_m.pth`, `ecdet_pose_l.pth`, and `ecdet_pose_x.pth`. These must be
+joint-model checkpoints: a detection-only `ecdet_*.pth` cannot be loaded into
+the structured pose decoder because its decoder parameters are different.
+
+The test deliberately **does not assert keypoint accuracy**. It verifies that
+each prediction contains 31 finite `(x, y, visibility)` outputs, but an
+untrained or newly initialized keypoint head is expected to predict incorrect
+landmarks. Detection IoU is still required to pass, so use checkpoints whose
+detection branch has been trained or fine-tuned. A JSON report is written to
+`outputs/ecdet_pose_all_sizes_test.json` by default.
+
 ### Custom Dataset
 
 <details>
