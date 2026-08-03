@@ -40,7 +40,10 @@ def load_checkpoint(model, checkpoint_path, device):
     return checkpoint.get("meta", {}) if isinstance(checkpoint, dict) else {}
 
 
-def preprocess(image):
+def preprocess(image, eval_spatial_size):
+    if eval_spatial_size is not None:
+        height, width = [int(v) for v in eval_spatial_size]
+        image = image.resize((width, height))
     tensor = TVF.to_tensor(image)
     tensor = TVF.normalize(tensor, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     return tensor
@@ -107,7 +110,7 @@ def main():
 
     for image_path in iter_images(args.input):
         image = Image.open(image_path).convert("RGB")
-        tensor = preprocess(image).unsqueeze(0).to(device)
+        tensor = preprocess(image, cfg.yaml_cfg.get("eval_spatial_size")).unsqueeze(0).to(device)
         sizes = torch.tensor([[image.width, image.height]], dtype=torch.float32, device=device)
         start = time.perf_counter()
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):

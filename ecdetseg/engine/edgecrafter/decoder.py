@@ -827,7 +827,7 @@ class ECTransformer(nn.Module):
                                                      out_keypoints[:-1] if out_keypoints is not None else None,
                                                      out_keypoint_logits[:-1] if out_keypoint_logits is not None else None)
             out['enc_aux_outputs'] = self._set_aux_loss(enc_topk_logits_list, enc_topk_bboxes_list)
-            out['pre_outputs'] = {'pred_logits': pre_logits, 'pred_boxes': pre_bboxes, 'pred_masks': pred_segs}
+            out['pre_outputs'] = {'pred_logits': pre_logits, 'pred_boxes': pre_bboxes, 'pred_masks': pre_segs}
             out['enc_meta'] = {'class_agnostic': self.query_select_method == 'agnostic'}
 
             if dn_meta is not None:
