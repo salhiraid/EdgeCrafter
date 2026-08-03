@@ -49,6 +49,8 @@ class HungarianMatcher(nn.Module):
         self.cost_class = weight_dict["cost_class"]
         self.cost_bbox = weight_dict["cost_bbox"]
         self.cost_giou = weight_dict["cost_giou"]
+        self.cost_keypoint = weight_dict.get("keypoint_cost_weight", weight_dict.get("cost_keypoint", 0.0))
+        self.cost_oks = weight_dict.get("oks_cost_weight", weight_dict.get("cost_oks", 0.0))
 
         self.use_focal_loss = use_focal_loss
         self.alpha = alpha
@@ -122,6 +124,23 @@ class HungarianMatcher(nn.Module):
 
         # Compute the giou cost betwen boxes
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
+
+        cost_keypoint = None
+        cost_oks = None
+        if (self.cost_keypoint or self.cost_oks) and 'pred_keypoints' in outputs and all('keypoints' in v for v in targets):
+            out_keypoints = outputs['pred_keypoints'].flatten(0, 1)
+            tgt_keypoints = torch.cat([v['keypoints'] for v in targets]).to(out_keypoints.device)
+            if tgt_keypoints.numel() > 0:
+                valid = tgt_keypoints[..., 2] > 0
+                distance = (out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]).abs().sum(-1)
+                valid_f = valid[None].to(distance.dtype)
+                cost_keypoint = (distance * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
+
+                areas = torch.cat([v.get('area', v['boxes'][:, 2] * v['boxes'][:, 3]) for v in targets]).to(out_keypoints.device)
+                squared_distance = ((out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]) ** 2).sum(-1)
+                oks = torch.exp(-squared_distance / (areas[None, :, None].clamp(min=1e-6) * 0.02))
+                oks = (oks * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
+                cost_oks = 1.0 - oks
         
         masks_present = "masks" in targets[0] and 'pred_masks' in outputs
         if masks_present:
@@ -152,6 +171,10 @@ class HungarianMatcher(nn.Module):
             
         # Final cost matrix 3 * self.cost_bbox + 2 * self.cost_class + self.cost_giou
         C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        if cost_keypoint is not None:
+            C = C + self.cost_keypoint * cost_keypoint
+        if cost_oks is not None:
+            C = C + self.cost_oks * cost_oks
         if masks_present:
             C = C + self.cost_mask_ce * cost_mask_ce + self.cost_mask_dice * cost_mask_dice
         C = C.view(bs, num_queries, -1).cpu()

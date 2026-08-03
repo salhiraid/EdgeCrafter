@@ -337,7 +337,8 @@ class TransformerDecoder(nn.Module):
                 reg_scale,
                 attn_mask=None,
                 memory_mask=None,
-                dn_meta=None):
+                dn_meta=None,
+                return_hs=False):
         output = target
         output_detach = pred_corners_undetach = 0
         value = self.value_op(memory, None, None, memory_mask, spatial_shapes)
@@ -399,13 +400,21 @@ class TransformerDecoder(nn.Module):
                 query_features=dec_out_hs,           # list[Tensor], [N,B,Nq,C]
             )
 
-            return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits), \
-                torch.stack(dec_out_pred_corners), torch.stack(dec_out_refs), torch.stack(dec_out_segs), \
+            result = (
+                torch.stack(dec_out_bboxes), torch.stack(dec_out_logits),
+                torch.stack(dec_out_pred_corners), torch.stack(dec_out_refs), torch.stack(dec_out_segs),
                 pre_bboxes, pre_scores, dec_out_segs[-1]
+            )
         else:
-            return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits), \
-                torch.stack(dec_out_pred_corners), torch.stack(dec_out_refs), None, \
+            result = (
+                torch.stack(dec_out_bboxes), torch.stack(dec_out_logits),
+                torch.stack(dec_out_pred_corners), torch.stack(dec_out_refs), None,
                 pre_bboxes, pre_scores, None
+            )
+
+        if return_hs:
+            return result + (torch.stack(dec_out_hs),)
+        return result
 
 @register()
 class ECTransformer(nn.Module):
@@ -440,6 +449,9 @@ class ECTransformer(nn.Module):
                  share_bbox_head=False,
                  share_score_head=False,
                  mask_downsample_ratio=None,
+                 num_keypoints=0,
+                 constrain_keypoints_to_box=True,
+                 keypoint_head_layers=3,
                  ):
         super().__init__()
         assert len(feat_channels) <= num_levels
@@ -460,6 +472,8 @@ class ECTransformer(nn.Module):
         self.eval_spatial_size = eval_spatial_size
         self.aux_loss = aux_loss
         self.reg_max = reg_max
+        self.num_keypoints = int(num_keypoints or 0)
+        self.constrain_keypoints_to_box = constrain_keypoints_to_box
 
         assert query_select_method in ('default', 'one2many', 'agnostic'), ''
         assert cross_attn_method in ('default', 'discrete'), ''
@@ -519,6 +533,17 @@ class ECTransformer(nn.Module):
             [dec_bbox_head if share_bbox_head else copy.deepcopy(dec_bbox_head) for _ in range(self.eval_idx + 1)]
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=activation) for _ in range(num_layers - self.eval_idx - 1)])
 
+        if self.num_keypoints > 0:
+            keypoint_xy_head = MLP(hidden_dim, hidden_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
+            keypoint_vis_head = nn.Linear(hidden_dim, self.num_keypoints)
+            self.dec_keypoint_xy_head = nn.ModuleList(
+                [keypoint_xy_head if share_bbox_head else copy.deepcopy(keypoint_xy_head) for _ in range(self.eval_idx + 1)]
+              + [MLP(scaled_dim, scaled_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
+                 for _ in range(num_layers - self.eval_idx - 1)])
+            self.dec_keypoint_vis_head = nn.ModuleList(
+                [keypoint_vis_head if share_score_head else copy.deepcopy(keypoint_vis_head) for _ in range(self.eval_idx + 1)]
+              + [nn.Linear(scaled_dim, self.num_keypoints) for _ in range(num_layers - self.eval_idx - 1)])
+
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
             anchors, valid_mask = self._generate_anchors()
@@ -551,6 +576,16 @@ class ECTransformer(nn.Module):
             if hasattr(reg_, 'layers'):
                 init.constant_(reg_.layers[-1].weight, 0)
                 init.constant_(reg_.layers[-1].bias, 0)
+
+        if self.num_keypoints > 0:
+            for xy_head in self.dec_keypoint_xy_head:
+                if hasattr(xy_head, 'layers'):
+                    init.constant_(xy_head.layers[-1].weight, 0)
+                    init.constant_(xy_head.layers[-1].bias, 0)
+            vis_bias = bias_init_with_prob(0.01)
+            for vis_head in self.dec_keypoint_vis_head:
+                init.constant_(vis_head.weight, 0)
+                init.constant_(vis_head.bias, vis_bias)
 
         if self.learn_query_content:
             init.xavier_uniform_(self.tgt_embed.weight)
@@ -736,7 +771,7 @@ class ECTransformer(nn.Module):
             self._get_decoder_input(memory, spatial_shapes, denoising_logits, denoising_bbox_unact)
 
         # decoder
-        out_bboxes, out_logits, out_corners, out_refs, out_masks, pre_bboxes, pre_logits, pre_segs  = self.decoder(
+        decoder_outputs = self.decoder(
                 spatial_feat,
                 init_ref_contents,
                 init_ref_points_unact,
@@ -750,7 +785,14 @@ class ECTransformer(nn.Module):
                 self.up,
                 self.reg_scale,
                 attn_mask=attn_mask,
-                dn_meta=dn_meta)    
+                dn_meta=dn_meta,
+                return_hs=self.num_keypoints > 0)
+        if self.num_keypoints > 0:
+            out_bboxes, out_logits, out_corners, out_refs, out_masks, pre_bboxes, pre_logits, pre_segs, out_hs = decoder_outputs
+            out_keypoints, out_keypoint_logits = self._predict_keypoints(out_hs, out_bboxes)
+        else:
+            out_bboxes, out_logits, out_corners, out_refs, out_masks, pre_bboxes, pre_logits, pre_segs = decoder_outputs
+            out_keypoints, out_keypoint_logits = None, None
 
         s_idx = dn_meta['dn_num_split'] if dn_meta is not None else None
 
@@ -764,6 +806,9 @@ class ECTransformer(nn.Module):
             dn_out_masks, out_masks = self._split(out_masks, 2, s_idx)
             dn_out_corners, out_corners =self._split(out_corners, 2, s_idx)
             dn_out_refs, out_refs = self._split(out_refs, 2, s_idx)
+            if out_keypoints is not None:
+                dn_out_keypoints, out_keypoints = self._split(out_keypoints, 2, s_idx)
+                dn_out_keypoint_logits, out_keypoint_logits = self._split(out_keypoint_logits, 2, s_idx)
 
         if self.training:
             out = {'pred_logits': out_logits[-1], 'pred_boxes': out_bboxes[-1], 'pred_corners': out_corners[-1],
@@ -771,22 +816,45 @@ class ECTransformer(nn.Module):
                     'ref_points': out_refs[-1], 'up': self.up, 'reg_scale': self.reg_scale}
         else:
             out = {'pred_logits': out_logits[-1], 'pred_boxes': out_bboxes[-1], 'pred_masks': out_masks[-1] if out_masks is not None else None}
+        if out_keypoints is not None:
+            out['pred_keypoints'] = out_keypoints[-1]
+            out['pred_keypoint_logits'] = out_keypoint_logits[-1]
 
         if self.training and self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss2(out_logits[:-1], out_bboxes[:-1], out_corners[:-1], 
                                                      out_refs[:-1], out_masks[:-1] if out_masks is not None else None,
-                                                     out_corners[-1], out_logits[-1])
+                                                     out_corners[-1], out_logits[-1],
+                                                     out_keypoints[:-1] if out_keypoints is not None else None,
+                                                     out_keypoint_logits[:-1] if out_keypoint_logits is not None else None)
             out['enc_aux_outputs'] = self._set_aux_loss(enc_topk_logits_list, enc_topk_bboxes_list)
             out['pre_outputs'] = {'pred_logits': pre_logits, 'pred_boxes': pre_bboxes, 'pred_masks': pred_segs}
             out['enc_meta'] = {'class_agnostic': self.query_select_method == 'agnostic'}
 
             if dn_meta is not None:
                 out['dn_outputs'] = self._set_aux_loss2(dn_out_logits, dn_out_bboxes, dn_out_corners, dn_out_refs, dn_out_masks,
-                                                        dn_out_corners[-1], dn_out_logits[-1])
+                                                        dn_out_corners[-1], dn_out_logits[-1],
+                                                        dn_out_keypoints if out_keypoints is not None else None,
+                                                        dn_out_keypoint_logits if out_keypoint_logits is not None else None)
                 out['dn_pre_outputs'] = {'pred_logits': dn_pre_logits, 'pred_boxes': dn_pre_bboxes, 'pred_masks': dn_pre_segs}
                 out['dn_meta'] = dn_meta
 
         return out
+
+    def _predict_keypoints(self, decoder_features, boxes):
+        keypoints = []
+        keypoint_logits = []
+        for i, hs in enumerate(decoder_features):
+            raw_xy = self.dec_keypoint_xy_head[i](hs).reshape(hs.shape[0], hs.shape[1], self.num_keypoints, 2)
+            keypoint_logits.append(self.dec_keypoint_vis_head[i](hs))
+            if self.constrain_keypoints_to_box:
+                rel_xy = raw_xy.sigmoid()
+                xy_min = boxes[i][..., :2] - 0.5 * boxes[i][..., 2:]
+                wh = boxes[i][..., 2:].clamp(min=1e-6)
+                xy = xy_min.unsqueeze(-2) + rel_xy * wh.unsqueeze(-2)
+            else:
+                xy = raw_xy.sigmoid()
+            keypoints.append(xy)
+        return torch.stack(keypoints), torch.stack(keypoint_logits)
 
 
     @torch.jit.unused
@@ -806,7 +874,9 @@ class ECTransformer(nn.Module):
         outputs_ref,
         outputs_masks=None,
         teacher_corners=None,
-        teacher_logits=None
+        teacher_logits=None,
+        outputs_keypoints=None,
+        outputs_keypoint_logits=None
     ):
         if outputs_masks is None:
             res = zip(
@@ -838,7 +908,10 @@ class ECTransformer(nn.Module):
             if outputs_masks is not None:
                 result['pred_masks'] = items[4]
 
+            if outputs_keypoints is not None:
+                result['pred_keypoints'] = outputs_keypoints[len(results)]
+                result['pred_keypoint_logits'] = outputs_keypoint_logits[len(results)]
+
             results.append(result)
 
         return results
-

@@ -4,7 +4,9 @@ Copyright(c) 2023 lyuwenyu. All Rights Reserved.
 """
 
 
-from ._transforms import (ConvertBoxes, ConvertPILImage, EmptyTransform,
+from ._transforms import (ConvertBoxes, ConvertKeypoints, ConvertPILImage,
+                          EmptyTransform, KeypointRandomHorizontalFlip,
+                          KeypointResize, KeypointSanitizeBoundingBoxes,
                           Normalize, PadToSize, RandomCrop,
                           RandomHorizontalFlip, RandomIoUCrop,
                           RandomPhotometricDistort, RandomZoomOut, Resize,

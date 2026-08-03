@@ -31,14 +31,31 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
     __inject__ = ['transforms', ]
     __share__ = ['remap_mscoco_category']
 
-    def __init__(self, img_folder, ann_file, transforms, return_masks=False, remap_mscoco_category=False):
+    def __init__(self, img_folder, ann_file, transforms, return_masks=False, remap_mscoco_category=False,
+                 num_keypoints=None, keypoint_names=None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
-        self.prepare = ConvertCocoPolysToMask(return_masks)
+        if num_keypoints is None:
+            num_keypoints = self._infer_num_keypoints()
+        self.num_keypoints = num_keypoints
+        self.keypoint_names = keypoint_names or self._infer_keypoint_names()
+        self.prepare = ConvertCocoPolysToMask(return_masks, num_keypoints=num_keypoints)
         self.img_folder = img_folder
         self.ann_file = ann_file
         self.return_masks = return_masks
         self.remap_mscoco_category = remap_mscoco_category
+
+    def _infer_num_keypoints(self):
+        categories = self.coco.dataset.get('categories', [])
+        values = [len(cat.get('keypoints', [])) for cat in categories if cat.get('keypoints')]
+        return values[0] if values else None
+
+    def _infer_keypoint_names(self):
+        categories = self.coco.dataset.get('categories', [])
+        for cat in categories:
+            if cat.get('keypoints'):
+                return list(cat['keypoints'])
+        return None
 
     def __getitem__(self, idx):
         img, target = self.load_item(idx)
@@ -111,8 +128,9 @@ def convert_coco_poly_to_mask(segmentations, height, width):
 
 
 class ConvertCocoPolysToMask(object):
-    def __init__(self, return_masks=False):
+    def __init__(self, return_masks=False, num_keypoints=None):
         self.return_masks = return_masks
+        self.num_keypoints = num_keypoints
 
     def __call__(self, image: Image.Image, target, **kwargs):
         w, h = image.size
@@ -144,12 +162,42 @@ class ConvertCocoPolysToMask(object):
             masks = convert_coco_poly_to_mask(segmentations, h, w)
 
         keypoints = None
-        if anno and "keypoints" in anno[0]:
-            keypoints = [obj["keypoints"] for obj in anno]
-            keypoints = torch.as_tensor(keypoints, dtype=torch.float32)
-            num_keypoints = keypoints.shape[0]
-            if num_keypoints:
-                keypoints = keypoints.view(num_keypoints, -1, 3)
+        keypoint_valid = None
+        if self.num_keypoints is not None:
+            keypoints_list = []
+            valid_list = []
+            for obj in anno:
+                obj_id = obj.get('id', '<unknown>')
+                if "keypoints" not in obj or obj["keypoints"] is None:
+                    keypoints_list.append([0.0] * (self.num_keypoints * 3))
+                    valid_list.append(False)
+                    continue
+                raw = obj["keypoints"]
+                expected = self.num_keypoints * 3
+                if len(raw) != expected:
+                    raise ValueError(
+                        f"Malformed keypoints for image_id={int(image_id.item())} annotation_id={obj_id}: "
+                        f"expected {expected} values for {self.num_keypoints} keypoints, got {len(raw)}"
+                    )
+                visibility = torch.as_tensor(raw, dtype=torch.float32).view(self.num_keypoints, 3)[:, 2]
+                if (~((visibility == 0) | (visibility == 1) | (visibility == 2))).any():
+                    raise ValueError(
+                        f"Malformed keypoints for image_id={int(image_id.item())} annotation_id={obj_id}: "
+                        "visibility values must be 0, 1 or 2"
+                    )
+                keypoints_list.append(raw)
+                valid_list.append(True)
+            keypoints = torch.as_tensor(keypoints_list, dtype=torch.float32).reshape(-1, self.num_keypoints, 3)
+            keypoint_valid = torch.tensor(valid_list, dtype=torch.bool)
+        elif any("keypoints" in obj for obj in anno):
+            lengths = {len(obj.get("keypoints", [])) for obj in anno if "keypoints" in obj}
+            if len(lengths) > 1:
+                raise ValueError(f"Inconsistent keypoint lengths in image_id={int(image_id.item())}: {sorted(lengths)}")
+            if lengths and next(iter(lengths)) % 3 != 0:
+                raise ValueError(f"Malformed keypoints for image_id={int(image_id.item())}: length is not divisible by 3")
+            inferred = next(iter(lengths)) // 3 if lengths else 0
+            keypoints = torch.as_tensor([obj.get("keypoints", [0.0] * (inferred * 3)) for obj in anno], dtype=torch.float32).reshape(-1, inferred, 3)
+            keypoint_valid = torch.tensor(["keypoints" in obj for obj in anno], dtype=torch.bool)
 
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
         boxes = boxes[keep]
@@ -158,6 +206,7 @@ class ConvertCocoPolysToMask(object):
             masks = masks[keep]
         if keypoints is not None:
             keypoints = keypoints[keep]
+            keypoint_valid = keypoint_valid[keep]
 
         target = {}
         target["boxes"] = boxes
@@ -167,6 +216,8 @@ class ConvertCocoPolysToMask(object):
         target["image_id"] = image_id
         if keypoints is not None:
             target["keypoints"] = keypoints
+            target["keypoint_valid"] = keypoint_valid
+            target["has_keypoints"] = keypoint_valid
 
         # for conversion to coco api
         area = torch.tensor([obj["area"] for obj in anno])

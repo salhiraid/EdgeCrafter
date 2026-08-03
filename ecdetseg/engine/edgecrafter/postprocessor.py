@@ -48,6 +48,8 @@ class PostProcessor(nn.Module):
     def forward(self, outputs, orig_target_sizes: torch.Tensor):
         logits, boxes = outputs['pred_logits'], outputs['pred_boxes']
         mask_pred = outputs.get('pred_masks', None)
+        keypoint_pred = outputs.get('pred_keypoints', None)
+        keypoint_logits = outputs.get('pred_keypoint_logits', None)
 
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
 
@@ -64,6 +66,8 @@ class PostProcessor(nn.Module):
             boxes = bbox_pred.gather(dim=1, index=index.unsqueeze(-1).repeat(1, 1, bbox_pred.shape[-1]))
             masks = mask_pred.gather(dim=1, index=index.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, mask_pred.shape[-2], 
                                                                                            mask_pred.shape[-1])) if mask_pred is not None else None
+            keypoints = keypoint_pred.gather(dim=1, index=index.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, keypoint_pred.shape[-2], keypoint_pred.shape[-1])) if keypoint_pred is not None else None
+            keypoint_scores = keypoint_logits.sigmoid().gather(dim=1, index=index.unsqueeze(-1).repeat(1, 1, keypoint_logits.shape[-1])) if keypoint_logits is not None else None
 
         else:
             scores = F.softmax(logits)[:, :, :-1]
@@ -72,10 +76,20 @@ class PostProcessor(nn.Module):
                 scores, index = torch.topk(scores, self.num_top_queries, dim=-1)
                 labels = torch.gather(labels, dim=1, index=index)
                 boxes = torch.gather(boxes, dim=1, index=index.unsqueeze(-1).tile(1, 1, boxes.shape[-1]))
+                keypoints = torch.gather(keypoint_pred, dim=1, index=index.unsqueeze(-1).unsqueeze(-1).tile(1, 1, keypoint_pred.shape[-2], keypoint_pred.shape[-1])) if keypoint_pred is not None else None
+                keypoint_scores = torch.gather(keypoint_logits.sigmoid(), dim=1, index=index.unsqueeze(-1).tile(1, 1, keypoint_logits.shape[-1])) if keypoint_logits is not None else None
+            else:
+                keypoints = keypoint_pred
+                keypoint_scores = keypoint_logits.sigmoid() if keypoint_logits is not None else None
+
+        if keypoints is not None:
+            keypoints = keypoints * orig_target_sizes.unsqueeze(1).unsqueeze(1)
 
         if self.deploy_mode:
             if mask_pred is not None:
                 return labels, boxes, scores, masks
+            if keypoints is not None:
+                return labels, boxes, scores, keypoints, keypoint_scores
             return labels, boxes, scores
 
         if self.remap_mscoco_category:
@@ -93,6 +107,10 @@ class PostProcessor(nn.Module):
                 results.append(res)
         else:
             results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+        if keypoints is not None:
+            for i, res in enumerate(results):
+                res['keypoints'] = keypoints[i]
+                res['keypoint_scores'] = keypoint_scores[i]
 
         return results
 

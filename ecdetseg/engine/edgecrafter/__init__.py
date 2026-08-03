@@ -12,5 +12,5 @@ from .decoder import ECTransformer
 from .ecvit import ViTAdapter
 from .hybrid_encoder import HybridEncoder
 from .matcher import HungarianMatcher
-from .modeling import ECDet, ECSeg
+from .modeling import ECDet, ECDetPose, ECSeg
 from .postprocessor import PostProcessor

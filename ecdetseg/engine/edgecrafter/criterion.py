@@ -47,6 +47,8 @@ class ECCriterion(nn.Module):
         mal_alpha=None,
         use_uni_set=True,
         mask_point_sample_ratio=None,
+        num_keypoints=0,
+        keypoint_oks_sigmas=None,
         ):
         super().__init__()
         self.num_classes = num_classes
@@ -64,6 +66,12 @@ class ECCriterion(nn.Module):
         self.mal_alpha = mal_alpha
         self.use_uni_set = use_uni_set
         self.mask_point_sample_ratio = matcher.mask_point_sample_ratio
+        self.num_keypoints = int(num_keypoints or 0)
+        self.keypoint_oks_sigmas = keypoint_oks_sigmas
+        if self.num_keypoints > 0 and keypoint_oks_sigmas is not None and len(keypoint_oks_sigmas) != self.num_keypoints:
+            raise ValueError(
+                f"keypoint_oks_sigmas length ({len(keypoint_oks_sigmas)}) must match num_keypoints ({self.num_keypoints})"
+            )
 
     def loss_labels_focal(self, outputs, targets, indices, num_boxes):
         assert 'pred_logits' in outputs
@@ -217,6 +225,67 @@ class ECCriterion(nn.Module):
         del src_masks
         del target_masks
         return losses
+
+    def loss_keypoints(self, outputs, targets, indices, num_boxes):
+        assert 'pred_keypoints' in outputs, "pred_keypoints missing in model outputs"
+        idx = self._get_src_permutation_idx(indices)
+        src_keypoints = outputs['pred_keypoints'][idx]
+        src_vis_logits = outputs['pred_keypoint_logits'][idx]
+        device = outputs['pred_logits'].device
+
+        if src_keypoints.numel() == 0:
+            zero = outputs['pred_logits'].sum() * 0.0
+            return {
+                'loss_keypoint': zero,
+                'loss_oks': zero,
+                'loss_keypoint_visibility': zero,
+            }
+
+        target_keypoints = []
+        target_areas = []
+        for t, (_, target_idx) in zip(targets, indices):
+            if len(target_idx) == 0:
+                continue
+            if 'keypoints' not in t:
+                target_keypoints.append(torch.zeros((len(target_idx), self.num_keypoints, 3), device=device))
+            else:
+                target_keypoints.append(t['keypoints'][target_idx])
+            if 'boxes' in t:
+                boxes = t['boxes'][target_idx]
+                target_areas.append((boxes[:, 2] * boxes[:, 3]).clamp(min=1e-6))
+            else:
+                target_areas.append(t['area'][target_idx])
+
+        tgt_keypoints = torch.cat(target_keypoints, dim=0).to(device=device, dtype=src_keypoints.dtype)
+        tgt_area = torch.cat(target_areas, dim=0).to(device=device, dtype=src_keypoints.dtype).clamp(min=1e-6)
+        if tgt_keypoints.shape[-2] != self.num_keypoints:
+            raise ValueError(
+                f"target keypoints has K={tgt_keypoints.shape[-2]}, expected num_keypoints={self.num_keypoints}"
+            )
+
+        valid = tgt_keypoints[..., 2] > 0
+        visible = tgt_keypoints[..., 2] > 1
+        valid_count = valid.sum().clamp(min=1).to(src_keypoints.dtype)
+
+        coord_loss = F.smooth_l1_loss(src_keypoints, tgt_keypoints[..., :2], reduction='none')
+        coord_loss = (coord_loss.sum(-1) * valid.to(coord_loss.dtype)).sum() / valid_count
+
+        target_vis = visible.to(src_vis_logits.dtype)
+        vis_loss = F.binary_cross_entropy_with_logits(src_vis_logits, target_vis, reduction='none')
+        vis_loss = (vis_loss * valid.to(vis_loss.dtype)).sum() / valid_count
+
+        oks = self._oks(src_keypoints, tgt_keypoints[..., :2], valid, tgt_area)
+        instance_valid = valid.any(dim=1)
+        if instance_valid.any():
+            oks_loss = (1.0 - oks[instance_valid]).sum() / instance_valid.sum().clamp(min=1).to(src_keypoints.dtype)
+        else:
+            oks_loss = src_keypoints.sum() * 0.0
+
+        return {
+            'loss_keypoint': coord_loss,
+            'loss_oks': oks_loss,
+            'loss_keypoint_visibility': vis_loss,
+        }
     
     def loss_local(self, outputs, targets, indices, num_boxes, T=5):
         """Compute Fine-Grained Localization (FGL) Loss
@@ -317,10 +386,22 @@ class ECCriterion(nn.Module):
             'vfl': self.loss_labels_vfl,
             'mal': self.loss_labels_mal,
             'local': self.loss_local,
-            'masks': self.loss_masks
+            'masks': self.loss_masks,
+            'keypoints': self.loss_keypoints,
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+
+    def _oks(self, pred_keypoints, target_xy, valid, area):
+        if self.keypoint_oks_sigmas is None:
+            sigmas = pred_keypoints.new_full((self.num_keypoints,), 0.1)
+        else:
+            sigmas = pred_keypoints.new_tensor(self.keypoint_oks_sigmas)
+        variances = (sigmas * 2) ** 2
+        squared_distance = ((pred_keypoints - target_xy) ** 2).sum(-1)
+        denom = area[:, None] * variances[None, :] * 2.0
+        oks_per_keypoint = torch.exp(-squared_distance / denom.clamp(min=1e-12)) * valid.to(pred_keypoints.dtype)
+        return oks_per_keypoint.sum(dim=1) / valid.sum(dim=1).clamp(min=1).to(pred_keypoints.dtype)
 
     def forward(self, outputs, targets, **kwargs):
         """ This performs the loss computation.
@@ -397,6 +478,8 @@ class ECCriterion(nn.Module):
         if 'pre_outputs' in outputs:
             aux_outputs = outputs['pre_outputs']
             for loss in self.losses:
+                if loss == 'keypoints' and 'pred_keypoints' not in aux_outputs:
+                    continue
                 use_uni_set = self.use_uni_set and (loss in ['boxes', 'local'])
                 indices_in = indices_go if use_uni_set else cached_indices[-1]
                 num_boxes_in = num_boxes_go if use_uni_set else num_boxes
@@ -423,6 +506,8 @@ class ECCriterion(nn.Module):
             for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
                 for loss in self.losses:
                     if loss == 'masks':
+                        continue
+                    if loss == 'keypoints' and 'pred_keypoints' not in aux_outputs:
                         continue
                     use_uni_set = self.use_uni_set and (loss == 'boxes')
                     indices_in = indices_go if use_uni_set else cached_indices_enc[i]
@@ -457,6 +542,8 @@ class ECCriterion(nn.Module):
             if 'dn_pre_outputs' in outputs:
                 aux_outputs = outputs['dn_pre_outputs']
                 for loss in self.losses:
+                    if loss == 'keypoints' and 'pred_keypoints' not in aux_outputs:
+                        continue
                     meta = self.get_loss_meta_info(loss, aux_outputs, targets, indices_dn)
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices_dn, dn_num_boxes, **meta)
                     l_dict = {k: l_dict[k] * self.weight_dict[k] for k in l_dict if k in self.weight_dict}

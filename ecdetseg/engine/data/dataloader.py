@@ -128,6 +128,16 @@ class BatchImageCollateFunction(BaseCollateFunction):
                 updated_targets[i]['area'] = torch.cat([targets[i]['area'], shifted_targets[i]['area']], dim=0)
                 if 'masks' in targets[i]:
                     updated_targets[i]['masks'] = torch.cat([targets[i]['masks'], shifted_targets[i]['masks']], dim=0)
+                if 'keypoints' in targets[i]:
+                    updated_targets[i]['keypoints'] = torch.cat([targets[i]['keypoints'], shifted_targets[i]['keypoints']], dim=0)
+                if 'keypoint_valid' in targets[i]:
+                    updated_targets[i]['keypoint_valid'] = torch.cat([targets[i]['keypoint_valid'], shifted_targets[i]['keypoint_valid']], dim=0)
+                if 'has_keypoints' in targets[i]:
+                    updated_targets[i]['has_keypoints'] = torch.cat([targets[i]['has_keypoints'], shifted_targets[i]['has_keypoints']], dim=0)
+                if 'keypoints' in targets[i]:
+                    updated_targets[i]['keypoints'] = torch.cat([targets[i]['keypoints'], shifted_targets[i]['keypoints']], dim=0)
+                if 'keypoint_valid' in targets[i]:
+                    updated_targets[i]['keypoint_valid'] = torch.cat([targets[i]['keypoint_valid'], shifted_targets[i]['keypoint_valid']], dim=0)
 
                 # Add mixup ratio to targets
                 updated_targets[i]['mixup'] = torch.tensor(

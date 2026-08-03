@@ -1,0 +1,11 @@
+__include__: [
+  '../ecdet/ecdet_m.yml',
+  'ecdetpose.yml',
+]
+
+output_dir: outputs/ecdetpose_m
+
+train_dataloader:
+  dataset:
+    transforms:
+      stop_epoch: 60

@@ -40,6 +40,9 @@ def main(args, ) -> None:
     """
     dist_utils.setup_distributed(args.print_rank, args.print_method, seed=args.seed)
 
+    if args.pretrained and not args.tuning:
+        args.tuning = args.pretrained
+
     assert not all([args.tuning, args.resume]), \
         'Only support from_scrach or resume or tuning at one time'
 
@@ -74,9 +77,11 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--config', type=str, default='')
     parser.add_argument('-r', '--resume', type=str, help='resume from checkpoint')
     parser.add_argument('-t', '--tuning', type=str, help='tuning from checkpoint')
+    parser.add_argument('--pretrained', type=str, help='warm-start model weights without optimizer/scheduler state')
     parser.add_argument('-d', '--device', type=str, help='device',)
     parser.add_argument('--seed', type=int, default=0, help='exp reproducibility')
     parser.add_argument('--use-amp', action='store_true', help='auto mixed precision training')
+    parser.add_argument('--amp', dest='use_amp', action='store_true', help='alias for --use-amp')
     parser.add_argument('--output-dir', type=str, help='output directoy')
     parser.add_argument('--summary-dir', type=str, help='tensorboard summry')
     parser.add_argument('--test-only', action='store_true', default=False,)

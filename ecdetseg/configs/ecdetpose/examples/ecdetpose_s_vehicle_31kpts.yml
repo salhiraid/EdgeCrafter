@@ -1,0 +1,45 @@
+__include__: [
+  '../ecdetpose_s.yml',
+]
+
+output_dir: outputs/ecdetpose_s_vehicle_31kpts
+num_classes: 1
+num_keypoints: 31
+remap_mscoco_category: False
+
+keypoint_names: [
+  kp_01, kp_02, kp_03, kp_04, kp_05, kp_06, kp_07, kp_08,
+  kp_09, kp_10, kp_11, kp_12, kp_13, kp_14, kp_15, kp_16,
+  kp_17, kp_18, kp_19, kp_20, kp_21, kp_22, kp_23, kp_24,
+  kp_25, kp_26, kp_27, kp_28, kp_29, kp_30, kp_31
+]
+keypoint_flip_pairs: []
+keypoint_oks_sigmas: [
+  0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
+  0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
+  0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
+  0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1
+]
+
+ECTransformer:
+  num_keypoints: 31
+  constrain_keypoints_to_box: True
+
+ECCriterion:
+  num_keypoints: 31
+
+train_dataloader:
+  dataset:
+    img_folder: <PATH_TO_TRAIN_IMAGES>
+    ann_file: <PATH_TO_TRAIN_COCO_KEYPOINTS_JSON>
+    num_keypoints: 31
+  total_batch_size: 8
+  num_workers: 4
+
+val_dataloader:
+  dataset:
+    img_folder: <PATH_TO_VAL_IMAGES>
+    ann_file: <PATH_TO_VAL_COCO_KEYPOINTS_JSON>
+    num_keypoints: 31
+  total_batch_size: 8
+  num_workers: 4
