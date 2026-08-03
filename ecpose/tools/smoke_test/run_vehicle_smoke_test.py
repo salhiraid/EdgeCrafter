@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download five images, run one training epoch, and report loss artifacts."""
+"""Train one epoch on three generated or user-provided COCO vehicle images."""
 
 import argparse
 import json
@@ -14,18 +14,31 @@ def main() -> None:
     parser.add_argument("--device", default="cpu", help="cpu, cuda, or cuda:0")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/ecvehicle_smoke"))
     parser.add_argument("--skip-download", action="store_true")
+    parser.add_argument("--images", type=Path,
+                        help="Folder containing exactly three user-provided images")
+    parser.add_argument("--annotations", type=Path,
+                        help="COCO JSON containing their boxes and 31 x,y,visibility triples")
     args = parser.parse_args()
 
     ecpose_root = Path(__file__).resolve().parents[2]
     output_dir = (ecpose_root / args.output_dir).resolve()
     data_dir = ecpose_root / "smoke_data"
 
-    if not args.skip_download:
+    if bool(args.images) != bool(args.annotations):
+        parser.error("--images and --annotations must be supplied together")
+
+    if not args.images and not args.skip_download:
         subprocess.run([
             sys.executable,
             str(Path(__file__).with_name("download_vehicle_smoke_data.py")),
             "--output", str(data_dir),
         ], check=True, cwd=ecpose_root)
+
+    images = args.images.resolve() if args.images else data_dir / "images"
+    annotations = args.annotations.resolve() if args.annotations else data_dir / "annotations" / "train.json"
+    annotation_data = json.loads(annotations.read_text())
+    if len(annotation_data.get("images", [])) != 3:
+        raise ValueError(f"Smoke test requires exactly 3 images; found {len(annotation_data.get('images', []))}")
 
     command = [
         sys.executable, "train.py",
@@ -34,6 +47,10 @@ def main() -> None:
         "--output-dir", str(output_dir),
         "--summary-dir", str(output_dir / "tensorboard"),
         "--seed", "0",
+        "-u", f"train_dataloader.dataset.img_folder={images}",
+        f"train_dataloader.dataset.ann_file={annotations}",
+        f"val_dataloader.dataset.img_folder={images}",
+        f"val_dataloader.dataset.ann_file={annotations}",
     ]
     if args.device.startswith("cuda"):
         command.append("--use-amp")

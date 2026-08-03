@@ -1,0 +1,14 @@
+__include__: ['ecvehicle.yml']
+
+output_dir: outputs/ecvehicle_l
+
+ViTAdapter: {name: ecpose_vits, embed_dim: 384, num_heads: 6, proj_dim: 256, interaction_indexes: [10, 11], weights_path: ecvits/ecpose_vits.pth}
+HybridEncoder: {in_channels: [256, 256, 256], depth_mult: 1, expansion: 0.75, hidden_dim: 256, dim_feedforward: 1024}
+DETRTransformer: {hidden_dim: 256, dim_feedforward: 1024, num_decoder_layers: 4}
+grad_accum_steps: 2
+
+optimizer:
+  type: AdamW
+  lr: 0.0005
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001

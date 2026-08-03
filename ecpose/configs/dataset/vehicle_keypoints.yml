@@ -1,53 +1,48 @@
+# COCO-keypoints dataset for joint vehicle detection and 31-landmark pose.
 task: pose
 
 evaluator:
   type: CocoEvaluator
   iou_types: ['bbox', 'keypoints']
-  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
+  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
-# Update these for your vehicle taxonomy. Use 1 for a single generic "vehicle" class.
+# Classes must use contiguous zero-based category ids. Increase this value for
+# taxonomies such as car/bus/truck/motorcycle.
 num_classes: 1
 remap_mscoco_category: False
+num_keypoints: 31
 
-# Number of annotated vehicle keypoints per instance. Keep this in sync with
-# DETRTransformer.num_body_points, DETRPoseCriterion.num_body_points, and
-# DETRPosePostProcessor.num_body_points in the model config.
-num_keypoints: 4
-
-train_dataloader: 
+train_dataloader:
   type: DataLoader
-  dataset: 
+  dataset:
     type: CocoDetection
     img_folder: /path/to/vehicle/train/images
     ann_file: /path/to/vehicle/train/annotations.json
     return_masks: False
-    num_keypoints: 4
-    transforms:
-      type: Compose
-      ops: ~
+    num_keypoints: 31
+    # Optional per-category subsets. Unlisted categories use all 31 points;
+    # points outside a listed subset are converted to (0, 0, 0).
+    # category_keypoint_indices: {0: [0, 1, 2, 3], 1: [0, 1, 2, 3, 26, 27]}
+    transforms: {type: Compose, ops: ~}
   shuffle: True
   num_workers: 4
   total_batch_size: 16
   drop_last: True
   pin_memory: True
-  collate_fn:
-    type: BatchImageCollateFunction
+  collate_fn: {type: BatchImageCollateFunction}
 
 val_dataloader:
   type: DataLoader
-  dataset: 
+  dataset:
     type: CocoDetection
     img_folder: /path/to/vehicle/val/images
     ann_file: /path/to/vehicle/val/annotations.json
     return_masks: False
-    num_keypoints: 4
-    transforms:
-      type: Compose
-      ops: ~ 
+    num_keypoints: 31
+    transforms: {type: Compose, ops: ~}
   shuffle: False
   num_workers: 4
   total_batch_size: 32
   drop_last: False
   pin_memory: True
-  collate_fn:
-    type: BatchImageCollateFunction
+  collate_fn: {type: BatchImageCollateFunction}

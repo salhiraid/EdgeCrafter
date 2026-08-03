@@ -1,66 +1,13 @@
-__include__: [
-  '../dataset/vehicle_keypoints.yml',
-  '../ecpose/ecpose.yml'
-]
+__include__: ['ecvehicle.yml']
 
 output_dir: outputs/ecvehicle_s
 
-eval_spatial_size: [640, 640]
-epoches: 92
-grad_accum_steps: 1
+ViTAdapter: {name: ecpose_vitt, embed_dim: 192, weights_path: ecvits/ecpose_vitt.pth, interaction_indexes: [10, 11], num_heads: 3}
+HybridEncoder: {in_channels: [192, 192, 192], depth_mult: 0.67, expansion: 0.34, hidden_dim: 192, dim_feedforward: 512}
+DETRTransformer: {hidden_dim: 192, dim_feedforward: 512, num_decoder_layers: 3}
 
-ViTAdapter:
-  name: ecpose_vitt
-  embed_dim: 192
-  weights_path: ecvits/ecpose_vitt.pth
-  interaction_indexes: [10, 11]
-  num_heads: 3
-
-DETRTransformer:
-  num_queries: 60
-  num_body_points: 4
-  dec_pred_bbox_embed_share: False  # Independent bbox regression head per decoder layer.
-
-DETRPoseCriterion:
-  num_classes: 1
-  num_body_points: 4
-  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
-  weight_dict: {loss_vfl: 2.0, loss_bbox: 5.0, loss_giou: 2.0, loss_keypoints: 10.0, loss_oks: 4.0}
-  losses: ['vfl', 'boxes', 'keypoints']
-  matcher:
-    type: DETRPoseHungarianMatcher
-    cost_class: 2.0
-    cost_bbox: 5.0
-    cost_giou: 2.0
-    cost_keypoints: 10.0
-    cost_oks: 4.0
-    focal_alpha: 0.25
-    num_body_points: 4
-    keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
-
-DETRPosePostProcessor:
-  num_select: 60
-  num_body_points: 4
-
-train_dataloader: 
-  dataset: 
-    transforms:
-      ops:
-        - {type: PoseMosaic, output_size: 320, default_num_keypoints: 4}
-        - {type: MixUpCopyPaste, mixup_prob: 0.5, copypaste_prob: 1.0, default_num_keypoints: 4}
-        - {type: RandomZoomOut, p: 0.5}
-        - {type: RandomHorizontalFlip}
-        - {type: ColorJitter}
-        - {type: Resize, size: [640, 640]}
-        - {type: ToTensor}
-        - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]} 
-      policy:
-        name: stop_epoch
-        epoch: [4, 45, 90]
-        ops: ['PoseMosaic', 'MixUpCopyPaste', 'RandomZoomOut']
-      mosaic_prob: 0.5
-  collate_fn:
-    type: BatchImageCollateFunction
-    base_size: 640
-    base_size_repeat: ~
-    stop_epoch: 90
+optimizer:
+  type: AdamW
+  lr: 0.0005
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001

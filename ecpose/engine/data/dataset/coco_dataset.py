@@ -32,10 +32,14 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
     __inject__ = ['transforms', ]
     __share__ = ['remap_mscoco_category']
 
-    def __init__(self, img_folder, ann_file, transforms, return_masks=False, remap_mscoco_category=False, num_keypoints=17):
+    def __init__(self, img_folder, ann_file, transforms, return_masks=False,
+                 remap_mscoco_category=False, num_keypoints=17,
+                 category_keypoint_indices=None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
-        self.prepare = ConvertCocoPolysToMask(return_masks, num_keypoints=num_keypoints)
+        self.prepare = ConvertCocoPolysToMask(
+            return_masks, num_keypoints=num_keypoints,
+            category_keypoint_indices=category_keypoint_indices)
         self.img_folder = Path(img_folder)
         self.ann_file = ann_file
         self.return_masks = return_masks
@@ -50,7 +54,8 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
                     continue
                 ann_ids = self.coco.getAnnIds(imgIds=image_id)
                 target = self.coco.loadAnns(ann_ids)
-                num_keypoints = [obj["num_keypoints"] for obj in target]
+                num_keypoints = [obj.get("num_keypoints", sum(
+                    value > 0 for value in obj.get("keypoints", [])[2::3])) for obj in target]
                 if sum(num_keypoints) == 0:
                     continue
                 self.all_imgIds.append(image_id)
@@ -145,9 +150,14 @@ def convert_coco_poly_to_mask(segmentations, height, width):
 
 
 class ConvertCocoPolysToMask(object):
-    def __init__(self, return_masks=False, num_keypoints=17):
+    def __init__(self, return_masks=False, num_keypoints=17,
+                 category_keypoint_indices=None):
         self.return_masks = return_masks
         self.num_keypoints = num_keypoints
+        self.category_keypoint_indices = {
+            int(category_id): set(indices)
+            for category_id, indices in (category_keypoint_indices or {}).items()
+        }
 
     def __call__(self, image: Image.Image, target, **kwargs):
         w, h = image.size
@@ -163,7 +173,31 @@ class ConvertCocoPolysToMask(object):
         anno = target["annotations"]
 
         anno = [obj for obj in anno if 'iscrowd' not in obj or obj['iscrowd'] == 0]
-        anno = [obj for obj in anno if obj['num_keypoints'] != 0]
+        anno = [obj for obj in anno if any(obj.get('keypoints', [])[2::3])]
+        expected_values = self.num_keypoints * 3
+        for annotation_index, obj in enumerate(anno):
+            if len(obj.get("keypoints", [])) != expected_values:
+                raise ValueError(
+                    f"Annotation {obj.get('id')} has {len(obj.get('keypoints', []))} "
+                    f"keypoint values; expected {expected_values} ({self.num_keypoints} x,y,v triples)"
+                )
+            invalid_visibility = set(obj["keypoints"][2::3]) - {0, 1, 2}
+            if invalid_visibility:
+                raise ValueError(f"Annotation {obj.get('id')} has invalid visibility values: {invalid_visibility}")
+            allowed = self.category_keypoint_indices.get(int(obj["category_id"]))
+            if allowed is not None:
+                invalid_indices = allowed - set(range(self.num_keypoints))
+                if invalid_indices:
+                    raise ValueError(
+                        f"Category {obj['category_id']} has keypoint indices outside "
+                        f"[0, {self.num_keypoints - 1}]: {sorted(invalid_indices)}"
+                    )
+                obj = obj.copy()
+                obj["keypoints"] = obj["keypoints"].copy()
+                for index in range(self.num_keypoints):
+                    if index not in allowed:
+                        obj["keypoints"][index * 3:(index + 1) * 3] = [0, 0, 0]
+                anno[annotation_index] = obj
         keypoints = [obj["keypoints"] for obj in anno]
         boxes = [obj["bbox"] for obj in anno]
         keypoints = torch.as_tensor(keypoints, dtype=torch.float32).reshape(-1, self.num_keypoints, 3)
