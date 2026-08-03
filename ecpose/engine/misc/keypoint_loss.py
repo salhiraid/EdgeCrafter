@@ -39,6 +39,7 @@ class OKSLoss(nn.Module):
     def __init__(self,
                  linear=False,
                  num_keypoints=17,
+                 sigmas=None,
                  eps=1e-6,
                  reduction='mean',
                  loss_weight=1.0):
@@ -47,7 +48,13 @@ class OKSLoss(nn.Module):
         self.eps = eps
         self.reduction = reduction
         self.loss_weight = loss_weight
-        if num_keypoints == 17:
+        if sigmas is not None:
+            if len(sigmas) != num_keypoints:
+                raise ValueError(
+                    f'Expected {num_keypoints} OKS sigmas, received {len(sigmas)}'
+                )
+            self.sigmas = np.asarray(sigmas, dtype=np.float32)
+        elif num_keypoints == 17:
             self.sigmas = np.array([
                 .26, .25, .25, .35, .35, .79, .79, .72, .72, .62, .62, 1.07,
                 1.07, .87, .87, .89, .89
@@ -62,7 +69,7 @@ class OKSLoss(nn.Module):
                 1.07, 1.07, 0.67
             ]) / 10.0
         else:
-            raise ValueError(f'Unsupported keypoints number {num_keypoints}')
+            self.sigmas = np.full(num_keypoints, 0.1, dtype=np.float32)
 
     def forward(self,
                 pred,

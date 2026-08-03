@@ -6,6 +6,8 @@
 import torch
 from torch import nn
 from torchvision.ops.boxes import nms
+from .box_ops import box_cxcywh_to_xyxy
+from .detrpose_utils import keypoints_to_boxes
 
 from ..core import register
 
@@ -24,7 +26,10 @@ class DETRPosePostProcessor(nn.Module):
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
         num_select = self.num_select
-        out_logits, out_keypoints= outputs['pred_logits'], outputs['pred_keypoints']
+        out_logits, out_keypoints = outputs['pred_logits'], outputs['pred_keypoints']
+        out_boxes = outputs.get('pred_boxes')
+        if out_boxes is None:
+            out_boxes = keypoints_to_boxes(out_keypoints, self.num_body_points)
 
         prob = out_logits.sigmoid()
         topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), num_select, dim=1)
@@ -37,8 +42,12 @@ class DETRPosePostProcessor(nn.Module):
         if self.deploy_mode:
             keypoints = torch.gather(out_keypoints, 1, topk_keypoints[..., None, None].expand(1, num_select, self.num_body_points, 2))
             keypoints = keypoints * target_sizes[:, None, None, :]
-            return scores, labels, keypoints
+            topk_boxes = torch.gather(out_boxes, 1, topk_keypoints[..., None].expand(out_boxes.shape[0], num_select, 4))
+            boxes = box_cxcywh_to_xyxy(topk_boxes) * target_sizes[:, None, :].repeat(1, 1, 2)
+            return scores, labels, boxes, keypoints
 
+        topk_boxes = torch.gather(out_boxes, 1, topk_keypoints.unsqueeze(-1).repeat(1, 1, 4))
+        boxes = box_cxcywh_to_xyxy(topk_boxes) * target_sizes[:, None, :].repeat(1, 1, 2)
         keypoints = torch.gather(out_keypoints, 1, topk_keypoints.unsqueeze(-1).repeat(1, 1, self.num_body_points*2))
         keypoints = keypoints * target_sizes.repeat(1, self.num_body_points)[:, None, :]
         keypoints_res = keypoints.unflatten(-1, (-1, 2))
@@ -46,7 +55,7 @@ class DETRPosePostProcessor(nn.Module):
             [keypoints_res, torch.ones_like(keypoints_res[..., 0:1])], 
             dim=-1).flatten(-2)
 
-        results = [{'scores': s, 'labels': l, 'keypoints': k} for s, l, k in zip(scores, labels, keypoints_res)]
+        results = [{'scores': s, 'labels': l, 'boxes': b, 'keypoints': k} for s, l, b, k in zip(scores, labels, boxes, keypoints_res)]
         return results
 
     def deploy(self, ):

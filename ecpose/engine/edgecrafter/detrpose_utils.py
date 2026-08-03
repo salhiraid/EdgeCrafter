@@ -16,12 +16,12 @@ from torch import Tensor, nn
 def gen_encoder_output_proposals(memory:Tensor, spatial_shapes:Tensor):
     """
     Input:
-        - memory: bs, \sum{hw}, d_model
+        - memory: bs, sum(hw), d_model
         - spatial_shapes: nlevel, 2
         - learnedwh: 2
     Output:
-        - output_memory: bs, \sum{hw}, d_model
-        - output_proposals: bs, \sum{hw}, 4
+        - output_memory: bs, sum(hw), d_model
+        - output_proposals: bs, sum(hw), 4
     """
     N_, S_, C_ = memory.shape
     base_scale = 4.0
@@ -140,3 +140,23 @@ def inverse_sigmoid(x, eps=1e-3):
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1/x2)
+
+def keypoints_to_boxes(keypoints: Tensor, num_body_points: int) -> Tensor:
+    """Return normalized cxcywh boxes tightly enclosing predicted keypoints.
+
+    Args:
+        keypoints: Tensor with shape ``[..., num_body_points * 2]`` or
+            ``[..., num_body_points, 2]`` containing normalized xy keypoints.
+        num_body_points: Number of keypoints per instance.
+    """
+    if keypoints.shape[-1] == num_body_points * 2:
+        points = keypoints.unflatten(-1, (num_body_points, 2))
+    else:
+        points = keypoints
+
+    points = points.clamp(0, 1)
+    xy_min = points.min(dim=-2).values
+    xy_max = points.max(dim=-2).values
+    center = (xy_min + xy_max) * 0.5
+    size = (xy_max - xy_min).clamp(min=1e-6)
+    return torch.cat([center, size], dim=-1)

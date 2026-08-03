@@ -216,7 +216,9 @@ class DeformableTransformerDecoderLayer(nn.Module):
             #     tensor = torch.concat((x1, x2), dim=2)
             # else:
             #     tensor[:, :, -np:] += pos
-            tensor[:, :, -np:] += pos
+            # Avoid mutating decoder activations in place: q/k reuse the same
+            # tensor and autograd needs its original value for backward.
+            tensor = torch.cat((tensor[:, :, :-np], tensor[:, :, -np:] + pos), dim=2)
         return tensor
     def forward_FFN(self, tgt):
         tgt2 = self.linear2(self.dropout2(self.activation(self.linear1(tgt))))
@@ -324,6 +326,7 @@ class TransformerDecoder(nn.Module):
                 # prediction heads
                 pre_pose_head,
                 pose_head,
+                bbox_head,
                 class_head,
                 lqe_head,
                 # feature map
@@ -347,6 +350,7 @@ class TransformerDecoder(nn.Module):
         output_pose_detach = pred_corners_undetach = 0
 
         dec_out_poses = []
+        dec_out_boxes = []
         dec_out_logits = []
         dec_out_refs = []
         dec_out_pred_corners = []
@@ -375,6 +379,7 @@ class TransformerDecoder(nn.Module):
                 # Initial bounding box predictions with inverse sigmoid refinement
                 pre_poses = F.sigmoid(pre_pose_head(output_pose) + inverse_sigmoid(refpoint_only_pose))
                 pre_scores = class_head[0](output_instance)
+                pre_boxes = bbox_head[0](output_instance).sigmoid()
                 ref_pose_initial = pre_poses.detach()
 
             # Refine bounding box corners using FDR, integrating previous layer's corrections
@@ -392,6 +397,7 @@ class TransformerDecoder(nn.Module):
                 logit = lqe_head[layer_id](score, refpoint_pose_without_center, feat_lqe)
                 dec_out_logits.append(logit)
                 dec_out_poses.append(refpoint_pose_without_center)
+                dec_out_boxes.append(bbox_head[layer_id](output_instance).sigmoid())
                 dec_out_pred_corners.append(pred_corners)
                 dec_out_refs.append(ref_pose_initial)
 
@@ -408,10 +414,12 @@ class TransformerDecoder(nn.Module):
 
         return (
             torch.stack(dec_out_poses), 
+            torch.stack(dec_out_boxes),
             torch.stack(dec_out_logits),
             torch.stack(dec_out_pred_corners),
             torch.stack(dec_out_refs),
             pre_poses,
+            pre_boxes,
             pre_scores,            
         )
 
@@ -439,6 +447,7 @@ class DETRTransformer(nn.Module):
         aux_loss=True,
         dec_pred_class_embed_share=False,
         dec_pred_pose_embed_share=False,
+        dec_pred_bbox_embed_share=False,
         two_stage_class_embed_share=True,
         two_stage_bbox_embed_share=True,
         cls_no_bias = False,
@@ -480,7 +489,7 @@ class DETRTransformer(nn.Module):
         else:
             self.tgt_embed = None
 
-        self.label_enc = nn.Embedding(80 + 1, hidden_dim)
+        self.label_enc = nn.Embedding(num_classes + 1, hidden_dim)
         self.pose_enc = nn.Embedding(num_body_points, hidden_dim)
             
         self._reset_parameters()
@@ -493,6 +502,7 @@ class DETRTransformer(nn.Module):
             self.enc_output_norm = nn.LayerNorm(hidden_dim)
         self.enc_out_class_embed = None
         self.enc_pose_embed = None
+        self.enc_bbox_embed = None
 
         # prepare class
         _class_embed = nn.Linear(hidden_dim, num_classes, bias=(not cls_no_bias))
@@ -509,6 +519,12 @@ class DETRTransformer(nn.Module):
         nn.init.constant_(_point_embed.layers[-1].weight.data, 0)
         nn.init.constant_(_point_embed.layers[-1].bias.data, 0)
 
+        # Independent object-level detection head. It consumes the decoder's
+        # instance token, while pose_embed consumes the keypoint tokens.
+        _bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        nn.init.constant_(_bbox_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(_bbox_embed.layers[-1].bias.data, 0)
+
         _lqe_embed = LQE(4, 256, 2, num_body_points)
         
         if dec_pred_class_embed_share:
@@ -523,8 +539,14 @@ class DETRTransformer(nn.Module):
         else:
             pose_embed_layerlist = [copy.deepcopy(_point_embed) for i in range(num_decoder_layers)]
 
+        if dec_pred_bbox_embed_share:
+            bbox_embed_layerlist = [_bbox_embed for i in range(num_decoder_layers)]
+        else:
+            bbox_embed_layerlist = [copy.deepcopy(_bbox_embed) for i in range(num_decoder_layers)]
+
         self.class_embed = nn.ModuleList(class_embed_layerlist)
         self.pose_embed = nn.ModuleList(pose_embed_layerlist)
+        self.bbox_embed = nn.ModuleList(bbox_embed_layerlist)
         self.lqe_embed = nn.ModuleList(lqe_embed_layerlist)
         self.pre_pose_embed = _pre_point_embed
         self.integral = Integral(reg_max)
@@ -544,6 +566,7 @@ class DETRTransformer(nn.Module):
             self.enc_pose_embed = _keypoint_embed
         else:
             self.enc_pose_embed = copy.deepcopy(_keypoint_embed)
+        self.enc_bbox_embed = copy.deepcopy(_bbox_embed)
 
         if two_stage_class_embed_share:
             self.enc_out_class_embed = _class_embed
@@ -653,6 +676,7 @@ class DETRTransformer(nn.Module):
         bs, nq = topk_memory.shape[:2]
         delta_unsig_keypoint = self.enc_pose_embed(topk_memory).reshape(bs, nq, self.num_body_points, 2)
         enc_outputs_pose_coord = F.sigmoid(delta_unsig_keypoint + topk_anchors.unsqueeze(-2))
+        enc_outputs_boxes = self.enc_bbox_embed(topk_memory).sigmoid()
         enc_outputs_center_coord = torch.mean(enc_outputs_pose_coord, dim=2, keepdim=True)
         enc_outputs_pose_coord = torch.cat([enc_outputs_center_coord, enc_outputs_pose_coord], dim=2)
         refpoint_pose_sigmoid = enc_outputs_pose_coord.detach()
@@ -680,7 +704,7 @@ class DETRTransformer(nn.Module):
                 training=self.training,
                 num_queries=self.num_queries,
                 hidden_dim=self.hidden_dim,
-                num_classes=80,
+                num_classes=self.num_classes,
                 label_enc=self.label_enc,
                 pose_enc=self.pose_enc,
                 num_keypoints=self.num_body_points,
@@ -703,11 +727,13 @@ class DETRTransformer(nn.Module):
             project = self.project
 
         (
-            out_poses, 
+            out_poses,
+            out_boxes,
             out_logits, 
             out_corners, 
             out_references, 
             out_pre_poses,
+            out_pre_boxes,
             out_pre_scores,) = self.decoder(
                 tgt=tgt_pose,
                 memory=value,  
@@ -716,6 +742,7 @@ class DETRTransformer(nn.Module):
                 attn_mask=attn_mask,
                 pre_pose_head=self.pre_pose_embed,
                 pose_head=self.pose_embed,
+                bbox_head=self.bbox_embed,
                 class_head=self.class_embed,
                 lqe_head=self.lqe_embed,
                 feat_lqe=feats[0],
@@ -736,19 +763,22 @@ class DETRTransformer(nn.Module):
             out_pre_poses = out_pre_poses.flatten(-2)
             
             dn_out_poses, out_poses = torch.split(out_poses,[dn_meta['pad_size'], self.num_queries], dim=2)
+            dn_out_boxes, out_boxes = torch.split(out_boxes, [dn_meta['pad_size'], self.num_queries], dim=2)
             dn_out_logits, out_logits = torch.split(out_logits, [dn_meta['pad_size'], self.num_queries], dim=2)
 
             dn_out_corners, out_corners = torch.split(out_corners, [dn_meta['pad_size'], self.num_queries], dim=2)
             dn_out_refs, out_refs = torch.split(out_references, [dn_meta['pad_size'], self.num_queries], dim=2)
 
             dn_out_pre_poses, out_pre_poses = torch.split(out_pre_poses,[dn_meta['pad_size'], self.num_queries], dim=1)
+            dn_out_pre_boxes, out_pre_boxes = torch.split(out_pre_boxes, [dn_meta['pad_size'], self.num_queries], dim=1)
             dn_out_pre_scores, out_pre_scores = torch.split(out_pre_scores, [dn_meta['pad_size'], self.num_queries], dim=1)
 
-        out = {'pred_logits': out_logits[-1], 'pred_keypoints': out_poses[-1]}
+        out = {'pred_logits': out_logits[-1], 'pred_keypoints': out_poses[-1], 'pred_boxes': out_boxes[-1]}
         if self.eval_aux:
             out['aux_outputs'] = self._set_aux_eval_outputs(
-                out_logits[:-1], 
+                out_logits[:-1],
                 out_poses[:-1],
+                out_boxes[:-1],
                 )
 
         if self.training and self.aux_loss:
@@ -763,42 +793,45 @@ class DETRTransformer(nn.Module):
             out['aux_outputs'] = self._set_aux_loss2(
                 out_logits[:-1], 
                 out_poses[:-1],
+                out_boxes[:-1],
                 out_corners[:-1],
                 out_refs[:-1],
                 out_corners[-1],
                 out_logits[-1],
                 )
             # prepare intermediate outputs
-            out['aux_interm_outputs'] = [{'pred_logits': interm_class, 'pred_keypoints': enc_outputs_pose_coord[:, :, 1:].flatten(-2)}]
-            out['aux_pre_outputs'] =  {'pred_logits': out_pre_scores, 'pred_keypoints': out_pre_poses}
+            out['aux_interm_outputs'] = [{'pred_logits': interm_class, 'pred_keypoints': enc_outputs_pose_coord[:, :, 1:].flatten(-2), 'pred_boxes': enc_outputs_boxes}]
+            out['aux_pre_outputs'] =  {'pred_logits': out_pre_scores, 'pred_keypoints': out_pre_poses, 'pred_boxes': out_pre_boxes}
             
             if dn_meta is not None:
                 out['dn_aux_outputs'] = self._set_aux_loss2(
                     dn_out_logits, 
                     dn_out_poses, 
+                    dn_out_boxes,
                     dn_out_corners, 
                     dn_out_refs, 
                     dn_out_corners[-1], 
                     dn_out_logits[-1]
                     )
-                out['dn_aux_pre_outputs'] =  {'pred_logits': dn_out_pre_scores, 'pred_keypoints': dn_out_pre_poses}
+                out['dn_aux_pre_outputs'] =  {'pred_logits': dn_out_pre_scores, 'pred_keypoints': dn_out_pre_poses, 'pred_boxes': dn_out_pre_boxes}
                 out['dn_meta'] = dn_meta
 
         return out #hs_pose, refpoint_pose, mix_refpoint, mix_embedding
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_keypoints):
+    def _set_aux_loss(self, outputs_class, outputs_keypoints, outputs_boxes):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_keypoints': c}
-                for a, c in zip(outputs_class, outputs_keypoints)]
+        return [{'pred_logits': a, 'pred_keypoints': c, 'pred_boxes': b}
+                for a, c, b in zip(outputs_class, outputs_keypoints, outputs_boxes)]
 
     @torch.jit.unused
     def _set_aux_loss2(
         self,
         outputs_class,
         outputs_keypoints,
+        outputs_boxes,
         outputs_corners,
         outputs_ref,
         teacher_corners=None,
@@ -811,16 +844,17 @@ class DETRTransformer(nn.Module):
             {
                 "pred_logits": a,
                 "pred_keypoints": b,
+                "pred_boxes": box,
                 "pred_corners": c,
                 "ref_points": d,
                 "teacher_corners": teacher_corners,
                 "teacher_logits": teacher_logits,
             }
-            for a, b, c, d in zip(outputs_class, outputs_keypoints, outputs_corners, outputs_ref)
+            for a, b, box, c, d in zip(outputs_class, outputs_keypoints, outputs_boxes, outputs_corners, outputs_ref)
         ]
 
     @torch.jit.unused
-    def _set_aux_eval_outputs(self, outputs_class, outputs_keypoints):
+    def _set_aux_eval_outputs(self, outputs_class, outputs_keypoints, outputs_boxes):
         """
         Construct intermediate outputs for evaluation visualization or per-layer analysis.
         Only keeps logits and keypoints (no training-related data).
@@ -828,7 +862,8 @@ class DETRTransformer(nn.Module):
         return [
             {
                 "pred_logits": cls,
-                "pred_keypoints": kpt
+                "pred_keypoints": kpt,
+                "pred_boxes": box
             }
-            for cls, kpt in zip(outputs_class, outputs_keypoints)
+            for cls, kpt, box in zip(outputs_class, outputs_keypoints, outputs_boxes)
         ]

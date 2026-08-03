@@ -32,14 +32,15 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
     __inject__ = ['transforms', ]
     __share__ = ['remap_mscoco_category']
 
-    def __init__(self, img_folder, ann_file, transforms, return_masks=False, remap_mscoco_category=False):
+    def __init__(self, img_folder, ann_file, transforms, return_masks=False, remap_mscoco_category=False, num_keypoints=17):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
-        self.prepare = ConvertCocoPolysToMask(return_masks)
+        self.prepare = ConvertCocoPolysToMask(return_masks, num_keypoints=num_keypoints)
         self.img_folder = Path(img_folder)
         self.ann_file = ann_file
         self.return_masks = return_masks
         self.remap_mscoco_category = remap_mscoco_category
+        self.num_keypoints = num_keypoints
 
         imgIds = sorted(self.coco.getImgIds())
         if "train" in ann_file:
@@ -144,8 +145,9 @@ def convert_coco_poly_to_mask(segmentations, height, width):
 
 
 class ConvertCocoPolysToMask(object):
-    def __init__(self, return_masks=False):
+    def __init__(self, return_masks=False, num_keypoints=17):
         self.return_masks = return_masks
+        self.num_keypoints = num_keypoints
 
     def __call__(self, image: Image.Image, target, **kwargs):
         w, h = image.size
@@ -164,7 +166,7 @@ class ConvertCocoPolysToMask(object):
         anno = [obj for obj in anno if obj['num_keypoints'] != 0]
         keypoints = [obj["keypoints"] for obj in anno]
         boxes = [obj["bbox"] for obj in anno]
-        keypoints = torch.as_tensor(keypoints, dtype=torch.float32).reshape(-1, 17, 3)
+        keypoints = torch.as_tensor(keypoints, dtype=torch.float32).reshape(-1, self.num_keypoints, 3)
         # guard against no boxes via resizing
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
         boxes[:, 2:] += boxes[:, :2]

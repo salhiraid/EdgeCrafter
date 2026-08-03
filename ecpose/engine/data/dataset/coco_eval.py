@@ -22,15 +22,18 @@ __all__ = ['CocoEvaluator',]
 
 @register()
 class CocoEvaluator(object):
-    def __init__(self, coco_gt, iou_types):
+    def __init__(self, coco_gt, iou_types, keypoint_sigmas=None):
         assert isinstance(iou_types, (list, tuple))
         coco_gt = copy.deepcopy(coco_gt)
         self.coco_gt : COCO = coco_gt
         self.iou_types = iou_types
+        self.keypoint_sigmas = keypoint_sigmas
 
         self.coco_eval = {}
         for iou_type in iou_types:
             self.coco_eval[iou_type] = COCOeval_faster(coco_gt, iouType=iou_type, print_function=print, separate_eval=True)
+            if iou_type == 'keypoints' and keypoint_sigmas is not None:
+                self.coco_eval[iou_type].params.kpt_oks_sigmas = np.asarray(keypoint_sigmas, dtype=np.float32)
 
         self.img_ids = []
         self.eval_imgs = {k: [] for k in iou_types}
@@ -39,6 +42,8 @@ class CocoEvaluator(object):
         self.coco_eval = {}
         for iou_type in self.iou_types:
             self.coco_eval[iou_type] = COCOeval_faster(self.coco_gt, iouType=iou_type, print_function=print, separate_eval=True)
+            if iou_type == 'keypoints' and self.keypoint_sigmas is not None:
+                self.coco_eval[iou_type].params.kpt_oks_sigmas = np.asarray(self.keypoint_sigmas, dtype=np.float32)
         self.img_ids = []
         self.eval_imgs = {k: [] for k in self.iou_types}
 

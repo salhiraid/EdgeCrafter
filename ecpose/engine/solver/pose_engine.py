@@ -4,6 +4,7 @@ Train and eval functions used in main.py
 """
 import math
 import sys
+from contextlib import nullcontext
 from typing import Iterable
 
 import torch
@@ -28,7 +29,8 @@ def train_one_epoch(self_lr_scheduler,
                     warmup_scheduler=None,
                     ema=None,
                     args=None):
-    scaler = torch.amp.GradScaler(str(device), enabled=True) # FIXME
+    amp_enabled = bool(args.use_amp and device.type == 'cuda')
+    scaler = torch.amp.GradScaler('cuda', enabled=amp_enabled)
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -39,7 +41,7 @@ def train_one_epoch(self_lr_scheduler,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = args.print_freq
     
-    sub_batch_size = batch_size // args.grad_accum_steps
+    grad_accum_steps = max(1, int(args.grad_accum_steps))
 
     print("Grad accum steps: ", args.grad_accum_steps)
     print("Batch size/GPU: ", batch_size)
@@ -54,27 +56,36 @@ def train_one_epoch(self_lr_scheduler,
 
         global_step = epoch * len(data_loader) + i
 
-        for j in range(args.grad_accum_steps):
-            start_idx = j * sub_batch_size
-            final_idx = start_idx + sub_batch_size
-            new_samples = samples[start_idx:final_idx]
-            new_samples = new_samples.to(device)
-            new_targets = [{k: v.to(device) for k, v in t.items()} for t in targets[start_idx:final_idx]]
+        effective_accum_steps = min(grad_accum_steps, samples.shape[0])
+        sample_chunks = samples.chunk(effective_accum_steps)
+        accumulated_loss_dict = {}
+        target_offset = 0
+        for new_samples in sample_chunks:
+            next_offset = target_offset + new_samples.shape[0]
+            new_targets = targets[target_offset:next_offset]
+            target_offset = next_offset
+            chunk_weight = new_samples.shape[0] / samples.shape[0]
 
-            with torch.amp.autocast(str(device), enabled=True):
+            autocast_context = torch.amp.autocast('cuda', enabled=True) if amp_enabled else nullcontext()
+            with autocast_context:
                 outputs = model(new_samples, new_targets)
-            
-            with torch.amp.autocast(str(device), enabled=False):
-                loss_dict = criterion(outputs, new_targets)
-                losses = sum(loss_dict.values())
 
-            if args.use_amp:
+            loss_dict = criterion(outputs, new_targets)
+            losses = sum(loss_dict.values()) * chunk_weight
+
+            if amp_enabled:
                 scaler.scale(losses).backward()
             else:
                 losses.backward()
 
+            for name, value in loss_dict.items():
+                accumulated_loss_dict[name] = (
+                    accumulated_loss_dict.get(name, 0)
+                    + value.detach() * chunk_weight
+                )
+
         # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        loss_dict_reduced = utils.reduce_dict(accumulated_loss_dict)
         losses_reduced_scaled = sum(loss_dict_reduced.values())
 
         loss_value = losses_reduced_scaled.item()
@@ -85,7 +96,7 @@ def train_one_epoch(self_lr_scheduler,
             sys.exit(1)
 
 
-        if args.use_amp:
+        if amp_enabled:
             if max_norm > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
@@ -113,15 +124,17 @@ def train_one_epoch(self_lr_scheduler,
             metric_logger.update(**{lr_name: param_group["lr"]})     
 
 
-        if writer and dist_utils.is_main_process() and global_step % 10 == 0:
+        log_interval = max(1, int(getattr(args, 'tensorboard_log_interval', 10)))
+        if writer and dist_utils.is_main_process() and global_step % log_interval == 0:
             writer.add_scalar('Loss/total', loss_value, global_step)
             for j, pg in enumerate(optimizer.param_groups):
                 writer.add_scalar(f'Lr/pg_{j}', pg['lr'], global_step)
             for k, v in loss_dict_reduced.items():
                 writer.add_scalar(f'Loss/{k}', v.item(), global_step)
-            free, total = torch.cuda.mem_get_info(device)
-            mem_used_MB = (total - free) / GIGABYTE
-            writer.add_scalar('Info/memory',  mem_used_MB, global_step)
+            if device.type == 'cuda':
+                free, total = torch.cuda.mem_get_info(device)
+                mem_used_gb = (total - free) / GIGABYTE
+                writer.add_scalar('Info/memory_gb', mem_used_gb, global_step)
 
         optimizer.zero_grad()
 
@@ -188,5 +201,6 @@ def evaluate(model, postprocessors, coco_evaluator, data_loader, device, writer=
 
     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
     if coco_evaluator is not None:
-        stats['coco_eval_keypoints'] = coco_evaluator.coco_eval['keypoints'].stats.tolist()
+        for iou_type, coco_eval in coco_evaluator.coco_eval.items():
+            stats[f'coco_eval_{iou_type}'] = coco_eval.stats.tolist()
     return stats

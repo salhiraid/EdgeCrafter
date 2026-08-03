@@ -25,6 +25,16 @@ def safe_get_rank():
         return 0
 
 class PoseSolver(BaseSolver):
+    def _build_training_logger(self):
+        logger = logging.getLogger(f'ecpose.training.rank{safe_get_rank()}')
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if not logger.handlers and self.output_dir and dist_utils.is_main_process():
+            handler = logging.FileHandler(self.output_dir / 'training.log')
+            handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+            logger.addHandler(handler)
+        return logger
+
     def train(self,):
         self._setup()
         self.criterion = self.cfg.criterion
@@ -66,6 +76,7 @@ class PoseSolver(BaseSolver):
     def fit(self,):
         self.train()
         args = self.cfg
+        training_logger = self._build_training_logger()
         n_parameters, model_stats = stats(self.cfg)
         
         print(model_stats)
@@ -83,8 +94,8 @@ class PoseSolver(BaseSolver):
         print("-" * 42 + "Start training" + "-" * 43)
         
         
-        top1 = 0
-        best_stat = {'epoch': -1, }
+        best_scores = {}
+        best_epochs = {}
         # evaluate again before resume training
         if self.last_epoch > 0:
             module = self.ema.module if self.ema else self.model
@@ -95,13 +106,10 @@ class PoseSolver(BaseSolver):
                 self.val_dataloader,
                 self.device
             )
-            for k in test_stats:
-                best_stat['epoch'] = self.last_epoch
-                best_stat[k] = test_stats[k][0]
-                top1 = test_stats[k][0]
-                print(f'best_stat: {best_stat}')
-
-        best_stat_print = best_stat.copy()
+            for name, values in test_stats.items():
+                if values:
+                    best_scores[name] = values[0]
+                    best_epochs[name] = self.last_epoch
         start_time = time.time()
         start_epoch = self.last_epoch + 1
         for epoch in range(start_epoch, args.epoches):
@@ -184,40 +192,33 @@ class PoseSolver(BaseSolver):
                             self.writer.add_scalar(f'Test/regular_{k}_{i}'.format(k), v, epoch)
                 eval_stats = test_stats
             
-            for k in eval_stats:
-                if k in best_stat:
-                    best_stat['epoch'] = epoch if eval_stats[k][0] > best_stat[k] else best_stat['epoch']
-                    best_stat[k] = max(best_stat[k], eval_stats[k][0])
-                else:
-                    best_stat['epoch'] = epoch
-                    best_stat[k] = eval_stats[k][0]
+            improved_metrics = set()
+            for name, values in eval_stats.items():
+                if not values:
+                    continue
+                score = values[0]
+                if score > best_scores.get(name, float('-inf')):
+                    best_scores[name] = score
+                    best_epochs[name] = epoch
+                    improved_metrics.add(name)
 
-                if best_stat[k] > top1:
-                    best_stat_print['epoch'] = epoch
-                    top1 = best_stat[k]
-                    if self.output_dir:
-                        if epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                            dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
-                        else:
-                            dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
+            primary_metric = (
+                'coco_eval_keypoints' if 'coco_eval_keypoints' in eval_stats
+                else 'coco_eval_bbox'
+            )
+            if self.output_dir and primary_metric in improved_metrics:
+                best_name = (
+                    'best_stg2.pth'
+                    if epoch >= self.train_dataloader.collate_fn.stop_epoch
+                    else 'best_stg1.pth'
+                )
+                dist_utils.save_on_master(self.state_dict(), self.output_dir / best_name)
 
-                best_stat_print[k] = max(best_stat[k], top1)
-                print(f'best_stat: {best_stat_print}')  # global best
-
-                if best_stat['epoch'] == epoch and self.output_dir:
-                    if epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                        if eval_stats[k][0] > top1:
-                            top1 = eval_stats[k][0]
-                            dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg2.pth')
-                    else:
-                        top1 = max(eval_stats[k][0], top1)
-                        dist_utils.save_on_master(self.state_dict(), self.output_dir / 'best_stg1.pth')
-
-                elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
-                    best_stat = {'epoch': -1, }
-                    self.ema.decay -= 0.0001
-                    # self.load_resume_state(str(self.output_dir / 'best_stg1.pth'))
-                    print(f'Refresh EMA at epoch {epoch} with decay {self.ema.decay}')
+            best_summary = {
+                name: {'score': score, 'epoch': best_epochs[name]}
+                for name, score in best_scores.items()
+            }
+            print(f'best_stats: {best_summary}')
 
 
             log_stats = {
@@ -234,6 +235,12 @@ class PoseSolver(BaseSolver):
             if self.output_dir and dist_utils.is_main_process():
                 with (self.output_dir / "log.txt").open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
+                training_logger.info(json.dumps(log_stats, sort_keys=True))
+
+            if self.writer and dist_utils.is_main_process():
+                for name, value in train_stats.items():
+                    self.writer.add_scalar(f'Epoch/train_{name}', value, epoch)
+                self.writer.flush()
                       
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))

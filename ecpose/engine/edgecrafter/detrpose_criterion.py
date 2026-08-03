@@ -12,7 +12,8 @@ from torch import nn
 from ..core import register
 from ..misc.dist_utils import get_world_size, is_dist_avail_and_initialized
 from ..misc.keypoint_loss import OKSLoss
-from .detrpose_utils import sigmoid_focal_loss
+from .box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from .detrpose_utils import keypoints_to_boxes, sigmoid_focal_loss
 
 
 @register()
@@ -25,6 +26,7 @@ class DETRPoseCriterion(nn.Module):
         weight_dict, 
         losses, 
         num_body_points,
+        keypoint_sigmas=None,
         focal_alpha=0.25, 
         mal_alpha=None, 
         gamma=2.0,
@@ -42,6 +44,7 @@ class DETRPoseCriterion(nn.Module):
         self.num_body_points = num_body_points
         self.oks = OKSLoss(linear=True,
                  num_keypoints=num_body_points,
+                 sigmas=keypoint_sigmas,
                  eps=1e-6,
                  reduction='mean',
                  loss_weight=1.0)
@@ -228,6 +231,28 @@ class DETRPoseCriterion(nn.Module):
         losses['loss_oks'] = oks_loss.sum() / num_boxes
         return losses
 
+
+    def _get_pred_boxes(self, outputs):
+        if 'pred_boxes' in outputs:
+            return outputs['pred_boxes']
+        return keypoints_to_boxes(outputs['pred_keypoints'], self.num_body_points)
+
+    def loss_boxes(self, outputs, targets, indices, num_boxes):
+        idx = self._get_src_permutation_idx(indices)
+        src_boxes = self._get_pred_boxes(outputs)[idx]
+        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        if src_boxes.numel() == 0:
+            zero = outputs['pred_logits'].sum() * 0
+            return {'loss_bbox': zero, 'loss_giou': zero}
+
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        loss_giou = 1 - torch.diag(generalized_box_iou(
+            box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
+        return {
+            'loss_bbox': loss_bbox.sum() / num_boxes,
+            'loss_giou': loss_giou.sum() / num_boxes,
+        }
+
     @torch.no_grad()
     def loss_matching_cost(self, outputs, targets, indices, num_boxes):
         cost_mean_dict = indices[1]
@@ -275,7 +300,8 @@ class DETRPoseCriterion(nn.Module):
         
         loss_map = {
             'labels': self.loss_labels,
-            "keypoints":self.loss_keypoints,
+            "keypoints": self.loss_keypoints,
+            "boxes": self.loss_boxes,
             "matching": self.loss_matching_cost,
             "vfl": self.loss_vfl,
             "mal": self.loss_mal,
@@ -351,8 +377,8 @@ class DETRPoseCriterion(nn.Module):
         t4_start = time.time()
         losses = {}
         for loss in self.losses:
-            indices_in = indices_go if loss in ["keypoints", "local"] else indices
-            num_boxes_in = num_boxes_go if loss in ["keypoints", "local"] else num_boxes
+            indices_in = indices_go if loss in ["keypoints", "local", "boxes"] else indices
+            num_boxes_in = num_boxes_go if loss in ["keypoints", "local", "boxes"] else num_boxes
             l_dict = self.get_loss(loss, outputs, targets, indices_in, num_boxes_in)
             l_dict = {k: l_dict[k] * self.weight_dict[k] for k in l_dict if k in self.weight_dict}
             losses.update(l_dict)
@@ -365,8 +391,8 @@ class DETRPoseCriterion(nn.Module):
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
                 aux_outputs["up"], aux_outputs["reg_scale"], aux_outputs["reg_max"] = outputs["up"], outputs["reg_scale"], outputs["reg_max"]
                 for loss in self.losses:
-                    indices_in = indices_go if loss in ["keypoints", "local"] else cached_indices[i]
-                    num_boxes_in = num_boxes_go if loss in ["keypoints", "local"] else num_boxes
+                    indices_in = indices_go if loss in ["keypoints", "local", "boxes"] else cached_indices[i]
+                    num_boxes_in = num_boxes_go if loss in ["keypoints", "local", "boxes"] else num_boxes
                     l_dict = self.get_loss(
                         loss, aux_outputs, targets, indices_in, num_boxes_in
                     )
@@ -387,8 +413,8 @@ class DETRPoseCriterion(nn.Module):
             t6_start = time.time()
             aux_outputs = outputs["aux_pre_outputs"]
             for loss in self.losses:
-                indices_in = indices_go if loss in ["keypoints", "local"] else cached_indices[-1]
-                num_boxes_in = num_boxes_go if loss in ["keypoints", "local"] else num_boxes
+                indices_in = indices_go if loss in ["keypoints", "local", "boxes"] else cached_indices[-1]
+                num_boxes_in = num_boxes_go if loss in ["keypoints", "local", "boxes"] else num_boxes
                 l_dict = self.get_loss(loss, aux_outputs, targets, indices_in, num_boxes_in)
 
                 l_dict = {
@@ -405,8 +431,8 @@ class DETRPoseCriterion(nn.Module):
             enc_targets = targets
             for i, aux_outputs in enumerate(outputs["aux_interm_outputs"]):
                 for loss in self.losses:
-                    indices_in = indices_go if loss == "keypoints" else cached_indices_enc[i]
-                    num_boxes_in = num_boxes_go if loss == "keypoints" else num_boxes
+                    indices_in = indices_go if loss in ["keypoints", "boxes"] else cached_indices_enc[i]
+                    num_boxes_in = num_boxes_go if loss in ["keypoints", "boxes"] else num_boxes
                     l_dict = self.get_loss(
                         loss, aux_outputs, enc_targets, indices_in, num_boxes_in
                     )
@@ -427,14 +453,15 @@ class DETRPoseCriterion(nn.Module):
             dn_pos_idx = []
             dn_neg_idx = []
             for i in range(len(targets)):
+                device = targets[i]['labels'].device
                 if len(targets[i]['labels']) > 0:
-                    t = torch.arange(len(targets[i]['labels'])).long().cuda()
+                    t = torch.arange(len(targets[i]['labels']), device=device).long()
                     t = t.unsqueeze(0).repeat(scalar, 1)
                     tgt_idx = t.flatten()
-                    output_idx = (torch.tensor(range(scalar)) * single_pad).long().cuda().unsqueeze(1) + t
+                    output_idx = (torch.arange(scalar, device=device) * single_pad).long().unsqueeze(1) + t
                     output_idx = output_idx.flatten()
                 else:
-                    output_idx = tgt_idx = torch.tensor([]).long().cuda()
+                    output_idx = tgt_idx = torch.empty(0, dtype=torch.long, device=device)
 
                 dn_pos_idx.append((output_idx, tgt_idx))
                 dn_neg_idx.append((output_idx + single_pad // 2, tgt_idx))

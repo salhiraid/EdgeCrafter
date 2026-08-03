@@ -1,0 +1,120 @@
+__include__: [
+  '../dataset/vehicle_keypoints.yml',
+  '../ecpose/ecpose.yml'
+]
+
+output_dir: outputs/ecvehicle_smoke
+summary_dir: outputs/ecvehicle_smoke/tensorboard
+tensorboard_log_interval: 1
+
+eval_spatial_size: [128, 128]
+epoches: 1
+grad_accum_steps: 1
+print_freq: 1
+checkpoint_freq: 1
+sync_bn: False
+find_unused_parameters: False
+use_amp: False
+use_ema: False
+
+ViTAdapter:
+  name: ecpose_vitt
+  embed_dim: 64
+  depth: 2
+  num_heads: 4
+  interaction_indexes: [0, 1]
+  skip_load_backbone: True
+
+HybridEncoder:
+  in_channels: [64, 64, 64]
+  hidden_dim: 64
+  dim_feedforward: 128
+  nhead: 4
+  depth_mult: 0.34
+  expansion: 0.25
+
+DETRTransformer:
+  hidden_dim: 64
+  nhead: 4
+  dim_feedforward: 128
+  num_decoder_layers: 2
+  num_queries: 5
+  num_body_points: 4
+  dec_pred_bbox_embed_share: False
+  reg_max: 8
+
+DETRPoseCriterion:
+  num_classes: 1
+  num_body_points: 4
+  keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
+  weight_dict: {loss_vfl: 2.0, loss_bbox: 5.0, loss_giou: 2.0, loss_keypoints: 10.0, loss_oks: 4.0}
+  losses: ['vfl', 'boxes', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 2.0
+    cost_bbox: 5.0
+    cost_giou: 2.0
+    cost_keypoints: 10.0
+    cost_oks: 4.0
+    focal_alpha: 0.25
+    num_body_points: 4
+    keypoint_sigmas: [0.1, 0.1, 0.1, 0.1]
+
+DETRPosePostProcessor:
+  num_select: 5
+  num_body_points: 4
+
+optimizer:
+  type: AdamW
+  lr: 0.0005
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+lr_scheduler:
+  type: MultiStepLR
+  milestones: [1]
+  gamma: 0.5
+
+lr_warmup_scheduler:
+  type: LinearWarmup
+  warmup_duration: 1
+
+train_dataloader:
+  total_batch_size: 1
+  num_workers: 0
+  drop_last: False
+  dataset:
+    img_folder: smoke_data/images
+    ann_file: smoke_data/annotations/train.json
+    num_keypoints: 4
+    transforms:
+      ops:
+        - {type: Resize, size: [128, 128]}
+        - {type: ToTensor}
+        - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+      policy: {name: default}
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 128
+    base_size_repeat: ~
+    stop_epoch: 1
+
+val_dataloader:
+  total_batch_size: 1
+  num_workers: 0
+  drop_last: False
+  dataset:
+    img_folder: smoke_data/images
+    ann_file: smoke_data/annotations/val.json
+    num_keypoints: 4
+    transforms:
+      ops:
+        - {type: Resize, size: [128, 128]}
+        - {type: ToTensor}
+        - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+      policy: {name: default}
+  collate_fn:
+    type: BatchImageCollateFunction
+    base_size: 128
+    base_size_repeat: ~
+    stop_epoch: 1
