@@ -14,3 +14,9 @@ from .hybrid_encoder import HybridEncoder
 from .matcher import HungarianMatcher
 from .modeling import ECDet, ECSeg
 from .postprocessor import PostProcessor
+
+# Optional structured instance + keypoint decoder for ECDet.
+from .detrpose_criterion import DETRPoseCriterion
+from .detrpose_matcher import DETRPoseHungarianMatcher
+from .detrpose_postprocesses import DETRPosePostProcessor
+from .detrpose_transformer import DETRTransformer

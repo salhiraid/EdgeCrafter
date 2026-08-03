@@ -1,0 +1,5 @@
+__include__: ['ecdet_pose.yml']
+output_dir: outputs/ecdet_pose_m
+ViTAdapter: {name: ecvittplus, embed_dim: 256, num_heads: 4, interaction_indexes: [10, 11], weights_path: ecvits/ecvittplus.pth}
+HybridEncoder: {in_channels: [256, 256, 256], depth_mult: 0.67, expansion: 0.75, hidden_dim: 256, dim_feedforward: 512}
+DETRTransformer: {hidden_dim: 256, nhead: 8, dim_feedforward: 512, num_decoder_layers: 4}

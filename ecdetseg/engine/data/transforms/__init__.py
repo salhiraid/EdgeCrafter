@@ -11,3 +11,4 @@ from ._transforms import (ConvertBoxes, ConvertPILImage, EmptyTransform,
                           SanitizeBoundingBoxes)
 from .container import Compose
 from .mosaic import Mosaic
+from .pose_transforms import PoseHorizontalFlip, PoseNormalize, PoseResize, PoseToTensor

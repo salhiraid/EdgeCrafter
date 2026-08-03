@@ -61,6 +61,65 @@ python tools/inference/torch_inf.py -c configs/ecdet/ecdet_l.yml -r ecdet_l.pth 
 
 ## 📁 Dataset Preparation
 
+### Optional ECDet vehicle keypoints
+
+ECDet can now keep its distilled backbone and hybrid encoder unchanged while
+selecting either the original box decoder or the structured ECPose decoder:
+
+* `configs/ecdet/ecdet_{s,m,l,x}.yml`: normal detection only.
+* `configs/ecdet_pose/ecdet_pose_{s,m,l,x}.yml`: joint vehicle boxes and 31
+  keypoints.
+
+The pose option sets `ECDet.with_keypoints: true` and replaces only the decoder,
+criterion, and postprocessor. Each object query contains an instance token plus
+31 keypoint tokens. Matching remains instance-level and the objective combines
+Varifocal classification, box L1/GIoU, visible-keypoint L1, and OKS losses. The
+annotation format is COCO keypoints: 31 consecutive `x, y, visibility` triples,
+where visibility is 0 (unlabelled), 1 (labelled but occluded), or 2 (visible).
+
+Set the image and JSON paths, along with the number of zero-based vehicle
+classes, in `configs/dataset/vehicle_keypoints.yml`, then train any size:
+
+```bash
+python train.py -c configs/ecdet_pose/ecdet_pose_s.yml --use-amp
+```
+
+For a one-epoch test using exactly three images and one annotation JSON:
+
+```bash
+python tools/smoke_test/run_vehicle_pose_smoke_test.py \
+  --images /path/to/images --annotations /path/to/annotations.json --device cpu
+```
+
+Omit `--images` and `--annotations` to create deterministic demonstration data.
+
+#### Create and preview all four model sizes
+
+There are no downloadable `ecdet_pose_*.pth` checkpoints yet. The initialization
+script downloads the released ECDet S/M/L/X checkpoints, strictly loads each
+pretrained detector, creates the corresponding pose model, copies every
+shape-compatible detector weight (including the complete backbone and encoder),
+and saves an initialization bundle. The pose decoder remains random and must be
+trained.
+
+Copy/paste image paths or a folder; no annotation JSON is required:
+
+```bash
+python tools/smoke_test/test_all_vehicle_pose_models.py \
+  /path/to/image1.jpg /path/to/image2.jpg /path/to/image_folder \
+  --device cuda:0
+```
+
+Each preview uses the released ECDet prediction for its bounding boxes, so
+detection remains pretrained. Colored keypoints come from the newly initialized
+pose decoder and are expected to be incorrect. Nearest-query association is used
+only for visualization.
+
+The script caches `ecdet_{s,m,l,x}.pth` in `checkpoints/` and writes annotated
+previews, `ecdet_pose_{s,m,l,x}_initialized.pth` bundles, and `report.json`. Each
+bundle contains both the pretrained `detector_model` state and the pose `model`
+training initialization. Use `--sizes s` for a quick check or omit it to process
+all four sizes.
 ### Custom Dataset
 
 <details>
