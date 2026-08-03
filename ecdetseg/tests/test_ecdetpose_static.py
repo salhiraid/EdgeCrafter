@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("PIL")
+
 from tests.utils.create_tiny_vehicle_keypoint_coco import create_tiny_vehicle_keypoint_coco
 
 
@@ -30,9 +32,10 @@ def test_tiny_vehicle_keypoint_coco_validator(tmp_path):
         capture_output=True,
         check=True,
     )
-    assert "num_keypoints: 31" in result.stdout
-    assert "malformed_keypoint_arrays: 0" in result.stdout
-    assert "empty_images: 1" in result.stdout
+    report = json.loads(result.stdout)
+    assert report["number_of_keypoints"] == 31
+    assert report["malformed_keypoint_arrays"] == []
+    assert report["empty_images"] == 1
 
 
 def test_malformed_keypoint_annotation_is_reported(tmp_path):
@@ -54,7 +57,8 @@ def test_malformed_keypoint_annotation_is_reported(tmp_path):
         capture_output=True,
         check=True,
     )
-    assert "malformed_keypoint_arrays: 1" in result.stdout
+    report = json.loads(result.stdout)
+    assert len(report["malformed_keypoint_arrays"]) == 1
 
 
 @pytest.mark.skipif(importlib.util.find_spec("torch") is None, reason="requires PyTorch runtime")
