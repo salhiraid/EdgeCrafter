@@ -112,6 +112,8 @@ def hflip(image, target):
         # keypoints[:,:,0] = w - keypoints[:,:, 0]
         keypoints[:,:,0] = torch.where(keypoints[..., -1]!=0, w - keypoints[:,:, 0]-1, 0)
         for pair in flip_pairs:
+            if max(pair) >= keypoints.shape[1]:
+                continue
             keypoints[:,pair[0], :], keypoints[:,pair[1], :] = keypoints[:,pair[1], :], keypoints[:,pair[0], :].clone()
         target["keypoints"] = keypoints
 

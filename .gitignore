@@ -212,3 +212,7 @@ __marimo__/
 *.onnx
 *.zip
 .DS_Store
+
+# Local training/smoke-test artifacts
+outputs/
+smoke_data/

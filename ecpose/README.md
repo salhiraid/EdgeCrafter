@@ -79,6 +79,60 @@ Use the same format as COCO keypoints and adapt `configs/dataset/coco_pose.yml`:
 - keep `task: pose`
 - adjust `num_classes` and remapping behavior if needed
 
+### Vehicle Bounding Boxes + Keypoints
+
+[`configs/ecvehicle/ecvehicle_s.yml`](./configs/ecvehicle/ecvehicle_s.yml) is a
+four-keypoint example that jointly trains vehicle classification, bounding-box
+regression, and keypoint regression. Update the image/annotation paths and
+taxonomy in
+[`configs/dataset/vehicle_keypoints.yml`](./configs/dataset/vehicle_keypoints.yml),
+and keep every `num_keypoints` / `num_body_points` value equal to the number of
+landmarks in each COCO annotation.
+
+Unlike deriving a box from the minimum and maximum keypoint coordinates, this
+configuration uses an independent learnable bbox branch on each decoder layer.
+The branch is optimized with L1 and GIoU losses, while the keypoint branch is
+optimized with keypoint and OKS losses.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
+  train.py -c configs/ecvehicle/ecvehicle_s.yml --use-amp --seed=0
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
+  train.py -c configs/ecvehicle/ecvehicle_s.yml --test-only -r /path/to/model.pth
+```
+
+#### Five-image smoke test
+
+Run the complete download → train → evaluate → log workflow on five public
+COCO images with deterministic pseudo vehicle annotations:
+
+```bash
+cd ecpose
+python tools/smoke_test/run_vehicle_smoke_test.py --device cpu
+```
+
+The smoke test uses a deliberately small two-block backbone, 128×128 inputs,
+five object queries, and one epoch. It validates the pipeline; its synthetic
+annotations and metrics are **not** an accuracy benchmark. Use `--device cuda:0`
+for a GPU run, or `--skip-download` to reuse `smoke_data/`. If the COCO image
+host is unavailable, the downloader creates five deterministic local fallback
+images; pass `--strict-download` directly to the downloader to disable fallback.
+
+Artifacts are written under `outputs/ecvehicle_smoke/`:
+
+- `log.txt`: one JSON object per epoch, including every averaged loss
+- `training.log`: timestamped text/JSON training records
+- `tensorboard/`: scalar events for total/component losses, learning rates, and
+  epoch summaries
+- `checkpoint.pth`: resumable smoke-test checkpoint
+
+Launch TensorBoard with:
+
+```bash
+tensorboard --logdir outputs/ecvehicle_smoke/tensorboard
+```
+
 ---
 
 ## 🔌 Model Configuration

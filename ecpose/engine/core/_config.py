@@ -77,6 +77,7 @@ class BaseConfig(object):
         self.checkpoint_freq :int = 1
         self.output_dir :str = None
         self.summary_dir :str = None
+        self.tensorboard_log_interval :int = 10
         self.device : str = ''
         
         self.grad_accum_steps = None
