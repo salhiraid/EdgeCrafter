@@ -93,33 +93,33 @@ python tools/smoke_test/run_vehicle_pose_smoke_test.py \
 
 Omit `--images` and `--annotations` to create deterministic demonstration data.
 
-#### Create and preview all four model sizes
+#### Test inference for all four model sizes
 
-There are no downloadable `ecdet_pose_*.pth` checkpoints yet. The initialization
-script downloads the released ECDet S/M/L/X checkpoints, strictly loads each
-pretrained detector, creates the corresponding pose model, copies every
-shape-compatible detector weight (including the complete backbone and encoder),
-and saves an initialization bundle. The pose decoder remains random and must be
-trained.
-
-Copy/paste image paths or a folder; no annotation JSON is required:
+Use the all-size inference test after training S/M/L/X joint checkpoints. It
+asserts that each config selects the correct backbone, loads the checkpoint
+strictly, checks output schemas and finite values, and verifies predicted boxes
+against the COCO ground-truth boxes using IoU:
 
 ```bash
 python tools/smoke_test/test_all_vehicle_pose_models.py \
-  /path/to/image1.jpg /path/to/image2.jpg /path/to/image_folder \
-  --device cuda:0
+  --images /path/to/images \
+  --annotations /path/to/annotations.json \
+  --checkpoint-dir /path/to/checkpoints \
+  --device cuda:0 --score-threshold 0.25 --min-box-iou 0.3
 ```
 
-Each preview uses the released ECDet prediction for its bounding boxes, so
-detection remains pretrained. Colored keypoints come from the newly initialized
-pose decoder and are expected to be incorrect. Nearest-query association is used
-only for visualization.
+The checkpoint directory must contain `ecdet_pose_s.pth`,
+`ecdet_pose_m.pth`, `ecdet_pose_l.pth`, and `ecdet_pose_x.pth`. These must be
+joint-model checkpoints: a detection-only `ecdet_*.pth` cannot be loaded into
+the structured pose decoder because its decoder parameters are different.
 
-The script caches `ecdet_{s,m,l,x}.pth` in `checkpoints/` and writes annotated
-previews, `ecdet_pose_{s,m,l,x}_initialized.pth` bundles, and `report.json`. Each
-bundle contains both the pretrained `detector_model` state and the pose `model`
-training initialization. Use `--sizes s` for a quick check or omit it to process
-all four sizes.
+The test deliberately **does not assert keypoint accuracy**. It verifies that
+each prediction contains 31 finite `(x, y, visibility)` outputs, but an
+untrained or newly initialized keypoint head is expected to predict incorrect
+landmarks. Detection IoU is still required to pass, so use checkpoints whose
+detection branch has been trained or fine-tuned. A JSON report is written to
+`outputs/ecdet_pose_all_sizes_test.json` by default.
+
 ### Custom Dataset
 
 <details>
