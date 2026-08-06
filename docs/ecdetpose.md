@@ -42,13 +42,15 @@ Training uses COCO annotations with per-object keypoints:
 
 Visibility follows COCO semantics:
 
-`0`: not labeled, ignored by coordinate and confidence losses.
+`0`: not labeled; ignored by coordinate and OKS losses, with confidence target 0 for keypoint-annotated instances.
 
 `1`: labeled but not visible, supervised for coordinates and confidence target 0.
 
 `2`: labeled and visible, supervised for coordinates and confidence target 1.
 
 The loader validates `len(keypoints) == 3 * num_keypoints` and reports image/annotation IDs for malformed objects.
+
+Mixed bbox/keypoint datasets are supported. If an annotation omits `keypoints` (or supplies an empty array), the loader inserts a `[K, 3]` zero placeholder and sets its per-instance `keypoint_valid` flag to false. This preserves one-to-one instance alignment through filtering and Mosaic-style concatenation, while the matcher and all three keypoint losses ignore that bbox's placeholder. Detection classification and box losses still use the bbox normally. An annotation that contains a correctly sized all-`v=0` keypoint array is different: it is an annotated pose, so it supervises confidence as absent but has no coordinate or OKS contribution.
 
 ## Augmentations
 
@@ -71,7 +73,7 @@ After detection matching, ECDetPose adds:
 
 `loss_oks`: configurable-sigma OKS loss.
 
-`loss_keypoint_visibility`: visibility/confidence BCE loss.
+`loss_keypoint_visibility`: visibility/confidence BCE loss over all joints of keypoint-annotated instances only.
 
 Do not use 17-person-keypoint COCO sigmas for 31 vehicle keypoints. Set `keypoint_oks_sigmas` to 31 values.
 
