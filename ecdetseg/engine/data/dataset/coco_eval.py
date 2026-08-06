@@ -25,28 +25,88 @@ from ...misc import dist_utils
 
 __all__ = ['CocoEvaluator',]
 
+COCO_METRIC_NAMES = {
+    'bbox': (
+        'AP', 'AP50', 'AP75', 'AP_small', 'AP_medium', 'AP_large',
+        'AR_1', 'AR_10', 'AR_100', 'AR_small', 'AR_medium', 'AR_large',
+    ),
+    'segm': (
+        'AP', 'AP50', 'AP75', 'AP_small', 'AP_medium', 'AP_large',
+        'AR_1', 'AR_10', 'AR_100', 'AR_small', 'AR_medium', 'AR_large',
+    ),
+    'keypoints': (
+        'AP', 'AP50', 'AP75', 'AP_medium', 'AP_large',
+        'AR', 'AR50', 'AR75', 'AR_medium', 'AR_large',
+    ),
+}
+
 
 @register()
 class CocoEvaluator(object):
-    def __init__(self, coco_gt, iou_types, verbose=True):
+    def __init__(self, coco_gt, iou_types, verbose=True, keypoint_oks_sigmas=None,
+                 keypoint_score_mode='bbox_keypoint', keypoint_score_thr=0.2):
         assert isinstance(iou_types, (list, tuple))
         coco_gt = copy.deepcopy(coco_gt)
         self.coco_gt : COCO = coco_gt
         self.coco_gt.dataset.setdefault('info', {})
         self.iou_types = iou_types
+        self.keypoint_oks_sigmas = keypoint_oks_sigmas
+        allowed_score_modes = ('bbox', 'keypoint', 'bbox_keypoint')
+        if keypoint_score_mode not in allowed_score_modes:
+            raise ValueError(
+                f'keypoint_score_mode must be one of {allowed_score_modes}, got {keypoint_score_mode!r}')
+        self.keypoint_score_mode = keypoint_score_mode
+        self.keypoint_score_thr = float(keypoint_score_thr)
+        if "keypoints" in iou_types:
+            self._prepare_keypoint_ground_truth()
         self.labels = [cat['name'] for cat in coco_gt.loadCats(coco_gt.getCatIds())] if verbose else None
 
         self.coco_eval = {}
         for iou_type in iou_types:
-            self.coco_eval[iou_type] = COCOeval(coco_gt, iouType=iou_type)
+            self.coco_eval[iou_type] = self._make_coco_eval(iou_type)
 
         self.img_ids = []
         self.eval_imgs = {k: [] for k in iou_types}
 
+    def _prepare_keypoint_ground_truth(self):
+        """Make bbox-only annotations valid ignored entries for COCO keypoint eval."""
+        fallback_keypoints = len(self.keypoint_oks_sigmas or [])
+        category_keypoints = {
+            category['id']: len(category.get('keypoints', [])) or fallback_keypoints
+            for category in self.coco_gt.dataset.get('categories', [])
+        }
+        for annotation in self.coco_gt.dataset.get('annotations', []):
+            num_keypoints = category_keypoints.get(annotation.get('category_id'), fallback_keypoints)
+            if not annotation.get('keypoints'):
+                annotation['keypoints'] = [0.0] * (num_keypoints * 3)
+                annotation['num_keypoints'] = 0
+            else:
+                annotation['num_keypoints'] = int(annotation.get(
+                    'num_keypoints', sum(v > 0 for v in annotation['keypoints'][2::3])))
+        self.coco_gt.createIndex()
+
+    def _make_coco_eval(self, iou_type):
+        coco_eval = COCOeval(self.coco_gt, iouType=iou_type)
+        if iou_type == 'keypoints' and self.keypoint_oks_sigmas is not None:
+            sigmas = np.asarray(self.keypoint_oks_sigmas, dtype=np.float64)
+            expected = max(
+                (len(category.get('keypoints', [])) for category in self.coco_gt.dataset.get('categories', [])),
+                default=0,
+            )
+            if expected and len(sigmas) != expected:
+                raise ValueError(
+                    f'keypoint_oks_sigmas has {len(sigmas)} values, but COCO categories define {expected} keypoints')
+            coco_eval.params.kpt_oks_sigmas = sigmas
+        return coco_eval
+
+    @staticmethod
+    def metric_names(iou_type):
+        return COCO_METRIC_NAMES[iou_type]
+
     def cleanup(self):
         self.coco_eval = {}
         for iou_type in self.iou_types:
-            self.coco_eval[iou_type] = COCOeval(self.coco_gt, iouType=iou_type)
+            self.coco_eval[iou_type] = self._make_coco_eval(iou_type)
         self.img_ids = []
         self.eval_imgs = {k: [] for k in self.iou_types}
 
@@ -163,10 +223,34 @@ class CocoEvaluator(object):
 
             boxes = prediction["boxes"]
             boxes = convert_to_xywh(boxes).tolist()
-            scores = prediction["scores"].tolist()
+            bbox_scores = prediction["scores"]
             labels = prediction["labels"].tolist()
-            keypoints = prediction["keypoints"]
-            keypoints = keypoints.flatten(start_dim=1).tolist()
+            keypoint_xy = prediction["keypoints"]
+            keypoint_scores = prediction.get("keypoint_scores")
+            if keypoint_scores is None:
+                keypoint_scores = torch.ones(
+                    keypoint_xy.shape[:-1], dtype=keypoint_xy.dtype, device=keypoint_xy.device)
+            if keypoint_scores.shape != keypoint_xy.shape[:-1]:
+                raise ValueError(
+                    f'keypoint_scores shape {tuple(keypoint_scores.shape)} does not match '
+                    f'keypoints shape {tuple(keypoint_xy.shape)}')
+
+            if self.keypoint_score_mode == 'bbox':
+                pose_scores = bbox_scores
+            elif self.keypoint_score_mode == 'keypoint':
+                pose_scores = keypoint_scores.mean(dim=-1)
+            else:
+                valid_scores = keypoint_scores > self.keypoint_score_thr
+                score_sum = (keypoint_scores * valid_scores).sum(dim=-1)
+                score_count = valid_scores.sum(dim=-1).clamp(min=1)
+                pose_scores = bbox_scores * (score_sum / score_count)
+
+            # COCO detections require flattened (x, y, v) triplets. As in
+            # MMPose, retain each model keypoint confidence in the third slot.
+            keypoints = torch.cat(
+                (keypoint_xy, keypoint_scores.unsqueeze(-1)), dim=-1
+            ).flatten(start_dim=1).tolist()
+            scores = pose_scores.tolist()
 
             coco_results.extend(
                 [

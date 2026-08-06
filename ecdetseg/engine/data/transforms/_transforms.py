@@ -130,7 +130,7 @@ def _image_size_hw(image):
 
 
 def _filter_target(target, keep):
-    for key in ["boxes", "labels", "area", "iscrowd", "masks", "keypoints", "keypoint_valid"]:
+    for key in ["boxes", "labels", "area", "iscrowd", "masks", "keypoints", "keypoint_valid", "has_keypoints"]:
         if key in target:
             target[key] = target[key][keep]
     return target

@@ -120,8 +120,15 @@ class ECSolver(BaseSolver):
 
             for k in test_stats:
                 if self.writer and dist_utils.is_main_process():
-                    for i, v in enumerate(test_stats[k]):
-                        self.writer.add_scalar(f'Test/{k}_{i}'.format(k), v, epoch)
+                    iou_type = {
+                        'coco_eval_bbox': 'bbox',
+                        'coco_eval_mask': 'segm',
+                        'coco_eval_keypoints': 'keypoints',
+                    }.get(k)
+                    metric_names = self.evaluator.metric_names(iou_type) if iou_type else ()
+                    for i, value in enumerate(test_stats[k]):
+                        metric_name = metric_names[i] if i < len(metric_names) else str(i)
+                        self.writer.add_scalar(f'Test/{k}/{metric_name}', value, epoch)
 
                 if k in best_stat:
                     best_stat['epoch'] = epoch if test_stats[k][0] > best_stat[k] else best_stat['epoch']
