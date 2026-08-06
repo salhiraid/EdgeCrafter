@@ -183,7 +183,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
             ap = np.mean(precisions[..., 0, -1], axis=(0, 1)) * 100
             ap_50 = np.mean(precisions[0, :, :, 0, -1], axis=0) * 100
             
-            prefix = 'bbox' if iou_type == 'bbox' else 'segm'
+            prefix = {'bbox': 'bbox', 'segm': 'segm', 'keypoints': 'keypoint'}[iou_type]
             headers.extend([f'{prefix}-AP', f'{prefix}-AP50'])
             res_per_type[iou_type] = (ap, ap_50)
 
@@ -202,9 +202,8 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
         
     
     if coco_evaluator is not None:
-        if 'segm' in iou_types:
-            stats['coco_eval_mask'] = coco_evaluator.coco_eval['segm'].stats.tolist()
-        elif 'bbox' in iou_types:
-            stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
+        metric_names = {'bbox': 'coco_eval_bbox', 'segm': 'coco_eval_mask', 'keypoints': 'coco_eval_keypoints'}
+        for iou_type in iou_types:
+            stats[metric_names[iou_type]] = coco_evaluator.coco_eval[iou_type].stats.tolist()
 
     return stats, coco_evaluator

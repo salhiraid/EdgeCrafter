@@ -28,25 +28,59 @@ __all__ = ['CocoEvaluator',]
 
 @register()
 class CocoEvaluator(object):
-    def __init__(self, coco_gt, iou_types, verbose=True):
+    def __init__(self, coco_gt, iou_types, verbose=True, keypoint_oks_sigmas=None):
         assert isinstance(iou_types, (list, tuple))
         coco_gt = copy.deepcopy(coco_gt)
         self.coco_gt : COCO = coco_gt
         self.coco_gt.dataset.setdefault('info', {})
         self.iou_types = iou_types
+        self.keypoint_oks_sigmas = keypoint_oks_sigmas
+        if "keypoints" in iou_types:
+            self._prepare_keypoint_ground_truth()
         self.labels = [cat['name'] for cat in coco_gt.loadCats(coco_gt.getCatIds())] if verbose else None
 
         self.coco_eval = {}
         for iou_type in iou_types:
-            self.coco_eval[iou_type] = COCOeval(coco_gt, iouType=iou_type)
+            self.coco_eval[iou_type] = self._make_coco_eval(iou_type)
 
         self.img_ids = []
         self.eval_imgs = {k: [] for k in iou_types}
 
+    def _prepare_keypoint_ground_truth(self):
+        """Make bbox-only annotations valid ignored entries for COCO keypoint eval."""
+        fallback_keypoints = len(self.keypoint_oks_sigmas or [])
+        category_keypoints = {
+            category['id']: len(category.get('keypoints', [])) or fallback_keypoints
+            for category in self.coco_gt.dataset.get('categories', [])
+        }
+        for annotation in self.coco_gt.dataset.get('annotations', []):
+            num_keypoints = category_keypoints.get(annotation.get('category_id'), fallback_keypoints)
+            if not annotation.get('keypoints'):
+                annotation['keypoints'] = [0.0] * (num_keypoints * 3)
+                annotation['num_keypoints'] = 0
+            else:
+                annotation['num_keypoints'] = int(annotation.get(
+                    'num_keypoints', sum(v > 0 for v in annotation['keypoints'][2::3])))
+        self.coco_gt.createIndex()
+
+    def _make_coco_eval(self, iou_type):
+        coco_eval = COCOeval(self.coco_gt, iouType=iou_type)
+        if iou_type == 'keypoints' and self.keypoint_oks_sigmas is not None:
+            sigmas = np.asarray(self.keypoint_oks_sigmas, dtype=np.float64)
+            expected = max(
+                (len(category.get('keypoints', [])) for category in self.coco_gt.dataset.get('categories', [])),
+                default=0,
+            )
+            if expected and len(sigmas) != expected:
+                raise ValueError(
+                    f'keypoint_oks_sigmas has {len(sigmas)} values, but COCO categories define {expected} keypoints')
+            coco_eval.params.kpt_oks_sigmas = sigmas
+        return coco_eval
+
     def cleanup(self):
         self.coco_eval = {}
         for iou_type in self.iou_types:
-            self.coco_eval[iou_type] = COCOeval(self.coco_gt, iouType=iou_type)
+            self.coco_eval[iou_type] = self._make_coco_eval(iou_type)
         self.img_ids = []
         self.eval_imgs = {k: [] for k in self.iou_types}
 
@@ -165,8 +199,13 @@ class CocoEvaluator(object):
             boxes = convert_to_xywh(boxes).tolist()
             scores = prediction["scores"].tolist()
             labels = prediction["labels"].tolist()
-            keypoints = prediction["keypoints"]
-            keypoints = keypoints.flatten(start_dim=1).tolist()
+            keypoint_xy = prediction["keypoints"]
+            # COCO detections require flattened (x, y, v) triplets. Model
+            # confidence is stored separately and COCO OKS only consumes x/y.
+            visibility = torch.full(
+                keypoint_xy.shape[:-1] + (1,), 2.0,
+                dtype=keypoint_xy.dtype, device=keypoint_xy.device)
+            keypoints = torch.cat((keypoint_xy, visibility), dim=-1).flatten(start_dim=1).tolist()
 
             coco_results.extend(
                 [
