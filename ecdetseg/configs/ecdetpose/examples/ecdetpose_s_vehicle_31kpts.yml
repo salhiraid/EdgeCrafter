@@ -68,6 +68,18 @@ ECCriterion:
     0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025
   ]
 
+# Report both standard COCO box AP and 31-keypoint OKS AP on val_dataloader.
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', 'keypoints']
+  verbose: True
+  keypoint_oks_sigmas: [
+    0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025,
+    0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025,
+    0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025,
+    0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025
+  ]
+
 val_dataloader:
   dataset:
     img_folder: <PATH_TO_VAL_IMAGES>

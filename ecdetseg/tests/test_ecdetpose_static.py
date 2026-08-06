@@ -73,3 +73,24 @@ def test_ecdetpose_model_construction_requires_torch():
         model = cfg.model
         assert type(model).__name__ == "ECDetPose"
         assert model.decoder.num_keypoints == 31
+
+
+def test_five_dataset_weighted_config():
+    yaml = pytest.importorskip("yaml")
+    config_path = ROOT / "configs" / "ecdetpose" / "examples" / "ecdetpose_s_vehicle_5datasets.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    dataset = config["train_dataloader"]["dataset"]
+    assert dataset["type"] == "WeightedMultiDataset"
+    assert len(dataset["datasets"]) == 5
+    assert len(dataset["weights"]) == 5
+    assert sum(dataset["weights"]) == pytest.approx(1.0)
+    assert dataset["samples_per_epoch"] > 0
+
+
+def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():
+    yaml = pytest.importorskip("yaml")
+    config_path = ROOT / "configs" / "ecdetpose" / "examples" / "ecdetpose_s_vehicle_31kpts.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    evaluator = config["evaluator"]
+    assert evaluator["iou_types"] == ["bbox", "keypoints"]
+    assert len(evaluator["keypoint_oks_sigmas"]) == 31
