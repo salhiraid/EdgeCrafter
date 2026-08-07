@@ -168,7 +168,7 @@ class ConvertCocoPolysToMask(object):
             valid_list = []
             for obj in anno:
                 obj_id = obj.get('id', '<unknown>')
-                if "keypoints" not in obj or obj["keypoints"] is None:
+                if "keypoints" not in obj or not obj["keypoints"]:
                     keypoints_list.append([0.0] * (self.num_keypoints * 3))
                     valid_list.append(False)
                     continue

@@ -131,7 +131,12 @@ class HungarianMatcher(nn.Module):
             out_keypoints = outputs['pred_keypoints'].flatten(0, 1)
             tgt_keypoints = torch.cat([v['keypoints'] for v in targets]).to(out_keypoints.device)
             if tgt_keypoints.numel() > 0:
-                valid = tgt_keypoints[..., 2] > 0
+                instance_valid = torch.cat([
+                    v.get('keypoint_valid', v.get('has_keypoints', torch.ones(
+                        len(v['boxes']), dtype=torch.bool, device=v['boxes'].device)))
+                    for v in targets
+                ]).to(device=out_keypoints.device, dtype=torch.bool)
+                valid = (tgt_keypoints[..., 2] > 0) & instance_valid[:, None]
                 distance = (out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]).abs().sum(-1)
                 valid_f = valid[None].to(distance.dtype)
                 cost_keypoint = (distance * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
