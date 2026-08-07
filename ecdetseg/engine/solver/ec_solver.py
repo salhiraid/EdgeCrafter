@@ -53,7 +53,11 @@ class ECSolver(BaseSolver):
                 self.postprocessor,
                 self.val_dataloader,
                 self.evaluator,
-                self.device
+                self.device,
+                writer=self.writer,
+                output_dir=self.output_dir,
+                epoch=self.last_epoch,
+                max_visualizations=10,
             )
             for k in test_stats:
                 best_stat['epoch'] = self.last_epoch
@@ -115,7 +119,11 @@ class ECSolver(BaseSolver):
                 self.postprocessor,
                 self.val_dataloader,
                 self.evaluator,
-                self.device
+                self.device,
+                writer=self.writer,
+                output_dir=self.output_dir,
+                epoch=epoch,
+                max_visualizations=10,
             )
 
             for k in test_stats:
@@ -124,6 +132,7 @@ class ECSolver(BaseSolver):
                         'coco_eval_bbox': 'bbox',
                         'coco_eval_mask': 'segm',
                         'coco_eval_keypoints': 'keypoints',
+                        'pose_eval': 'pose',
                     }.get(k)
                     metric_names = self.evaluator.metric_names(iou_type) if iou_type else ()
                     for i, value in enumerate(test_stats[k]):
@@ -180,7 +189,9 @@ class ECSolver(BaseSolver):
 
         module = self.ema.module if self.ema else self.model
         test_stats, coco_evaluator = evaluate(module, self.criterion, self.postprocessor,
-                self.val_dataloader, self.evaluator, self.device)
+                self.val_dataloader, self.evaluator, self.device,
+                writer=self.writer, output_dir=self.output_dir,
+                epoch=max(self.last_epoch, 0), max_visualizations=10)
 
         if self.output_dir:
             dist_utils.save_on_master(coco_evaluator.coco_eval[self.iou_type].eval, self.output_dir / "eval.pth")

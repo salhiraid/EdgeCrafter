@@ -166,6 +166,10 @@ evaluator:
   verbose: true
   keypoint_score_mode: bbox_keypoint
   keypoint_score_thr: 0.2
+  keypoint_distance_thresholds: [5, 10]
+  keypoint_visibility_thr: 0.5
+  keypoint_match_iou_thr: 0.5
+  pose_detection_score_thr: 0.3
   keypoint_oks_sigmas: [0.025, ...]  # exactly 31 values
 ```
 
@@ -188,11 +192,28 @@ Test/coco_eval_keypoints/AP50
 Test/coco_eval_keypoints/AP75
 Test/coco_eval_keypoints/AP_medium
 Test/coco_eval_keypoints/AP_large
+Test/pose_eval/Precision_5px
+Test/pose_eval/Recall_5px
+Test/pose_eval/F1_5px
+Test/pose_eval/Precision_10px
+Test/pose_eval/Recall_10px
+Test/pose_eval/F1_10px
+Test/pose_eval/Visibility_Precision
+Test/pose_eval/Visibility_Recall
+Test/pose_eval/Visibility_F1
 ```
 
 The remaining named AR metrics are logged in the same groups. Start TensorBoard with `tensorboard --logdir outputs/ecdetpose_s_vehicle_31kpts/summary` (or the configured output directory's `summary` folder).
 
 For pose ranking, `bbox_keypoint` follows the MMPose strategy: it multiplies the detection score by the mean confidence of keypoints above `keypoint_score_thr`. Set `keypoint_score_mode: bbox` to reproduce bbox-only ranking, or `keypoint` to rank only by mean keypoint confidence. DETR predictions remain NMS-free by design; no additional OKS NMS is applied.
+
+The pixel-distance metrics first retain detections with score at least `pose_detection_score_thr`, then greedily match predictions to same-category ground truths at `keypoint_match_iou_thr`. A labeled ground-truth keypoint (`v > 0`) is a true positive at 5 px or 10 px only when its predicted visibility confidence is at least `keypoint_visibility_thr` and its Euclidean image-space error is within that distance. Missed or inaccurate labeled joints are false negatives; inaccurate confident joints and joints from unmatched detections are false positives. Visibility precision/recall/F1 treats `v=2` as visible and `v=0/1` as not visible. Bbox-only annotations are excluded from all pose and visibility counts.
+
+Every validation pass also renders up to 10 images with green predicted boxes and red visible predicted keypoints. The images appear in TensorBoard under `Validation_predictions` and are saved as JPEGs under:
+
+```text
+<output_dir>/prediction_visualizations/epoch_XXXX/image_<image_id>.jpg
+```
 
 To evaluate a checkpoint without training, run:
 
