@@ -162,6 +162,13 @@ and `num_keypoints` fields are not passed to `WeightedMultiDataset`. If you see
 `unexpected keyword argument 'img_folder'`, update `engine/core/yaml_utils.py`
 and the five-dataset config from the same revision.
 
+`WeightedMultiDataset` exposes the shared composed augmentation pipeline under
+both `transforms` and the legacy `_transforms` attribute expected by
+`ECSolver`. The solver also accepts either name when reading `stop_epoch` and
+`mosaic_epoch`. This compatibility is required before the first training epoch;
+if `_transforms` is missing, update `engine/data/dataset/_dataset.py` and
+`engine/solver/ec_solver.py` together.
+
 ## COCO Evaluation Metrics
 
 The vehicle example evaluates both detection and pose on the single dataset configured under `val_dataloader`:

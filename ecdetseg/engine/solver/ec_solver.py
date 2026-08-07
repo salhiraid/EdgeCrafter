@@ -28,10 +28,18 @@ class ECSolver(BaseSolver):
         print(model_stats)
         print("-"*42 + "Start training" + "-"*43)
         
-        stop_aug_epoch = self.train_dataloader.dataset._transforms.stop_epoch  # epoch to stop augmentation
+        train_dataset = self.train_dataloader.dataset
+        train_transforms = getattr(train_dataset, '_transforms', None)
+        if train_transforms is None:
+            train_transforms = getattr(train_dataset, 'transforms', None)
+        if train_transforms is None:
+            raise RuntimeError(
+                f'{type(train_dataset).__name__} does not expose a training transforms pipeline')
+
+        stop_aug_epoch = train_transforms.stop_epoch  # epoch to stop augmentation
         if args.lrsheduler is not None:
             no_aug_epochs = args.epochs - stop_aug_epoch
-            flat_epochs = self.train_dataloader.dataset._transforms.mosaic_epoch if args.flat_epoch is None else args.flat_epoch
+            flat_epochs = train_transforms.mosaic_epoch if args.flat_epoch is None else args.flat_epoch
             iter_per_epoch = len(self.train_dataloader)
             warmup_iter = min(args.warmup_iter, 3 * iter_per_epoch)  
             

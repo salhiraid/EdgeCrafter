@@ -52,6 +52,10 @@ class WeightedMultiDataset(data.Dataset):
 
         self.datasets = list(datasets)
         self.transforms = transforms
+        # CocoDetection and the solver historically expose the composed
+        # augmentation pipeline as ``_transforms``. Keep that dataset
+        # interface on the weighted wrapper as well as the public alias.
+        self._transforms = transforms
         self.weights = weights / weights.sum()
         self.samples_per_epoch = int(samples_per_epoch or sum(len(dataset) for dataset in datasets))
         if self.samples_per_epoch <= 0:

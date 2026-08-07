@@ -112,6 +112,16 @@ def test_five_dataset_include_replaces_coco_dataset_node():
     assert not {"img_folder", "ann_file", "num_keypoints"}.intersection(dataset)
 
 
+def test_weighted_dataset_matches_solver_transform_interface():
+    dataset_source = (ROOT / "engine" / "data" / "dataset" / "_dataset.py").read_text(
+        encoding="utf-8")
+    solver_source = (ROOT / "engine" / "solver" / "ec_solver.py").read_text(
+        encoding="utf-8")
+    assert "self._transforms = transforms" in dataset_source
+    assert "getattr(train_dataset, '_transforms', None)" in solver_source
+    assert "getattr(train_dataset, 'transforms', None)" in solver_source
+
+
 def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():
     yaml = pytest.importorskip("yaml")
     config_path = ROOT / "configs" / "ecdetpose" / "examples" / "ecdetpose_s_vehicle_31kpts.yml"
