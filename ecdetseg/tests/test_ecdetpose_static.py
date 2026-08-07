@@ -94,3 +94,13 @@ def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():
     evaluator = config["evaluator"]
     assert evaluator["iou_types"] == ["bbox", "keypoints"]
     assert len(evaluator["keypoint_oks_sigmas"]) == 31
+    assert evaluator["keypoint_score_mode"] == "bbox_keypoint"
+    assert evaluator["keypoint_score_thr"] == pytest.approx(0.2)
+
+
+def test_tensorboard_uses_named_coco_metrics():
+    solver_source = (ROOT / "engine" / "solver" / "ec_solver.py").read_text(encoding="utf-8")
+    evaluator_source = (ROOT / "engine" / "data" / "dataset" / "coco_eval.py").read_text(encoding="utf-8")
+    assert "Test/{k}/{metric_name}" in solver_source
+    for name in ("AP50", "AP75", "AP_small", "AP_medium", "AP_large", "AR_medium", "AR_large"):
+        assert repr(name) in evaluator_source

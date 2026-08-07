@@ -164,6 +164,8 @@ evaluator:
   type: CocoEvaluator
   iou_types: ['bbox', 'keypoints']
   verbose: true
+  keypoint_score_mode: bbox_keypoint
+  keypoint_score_thr: 0.2
   keypoint_oks_sigmas: [0.025, ...]  # exactly 31 values
 ```
 
@@ -172,7 +174,27 @@ During training, validation runs after every epoch and prints the standard COCO 
 - `bbox`: AP, AP50, AP75, AP-small, AP-medium, AP-large, and the corresponding AR metrics.
 - `keypoints`: OKS AP, AP50, AP75, AP-medium, AP-large, AR, AR50, AR75, AR-medium, and AR-large.
 
-The same arrays are appended to `outputs/ecdetpose_s_vehicle_31kpts/log.txt` as `test_coco_eval_bbox` and `test_coco_eval_keypoints`. To evaluate a checkpoint without training, run:
+The same arrays are appended to `outputs/ecdetpose_s_vehicle_31kpts/log.txt` as `test_coco_eval_bbox` and `test_coco_eval_keypoints`. TensorBoard records every value with a readable name rather than a numeric suffix:
+
+```text
+Test/coco_eval_bbox/AP
+Test/coco_eval_bbox/AP50
+Test/coco_eval_bbox/AP75
+Test/coco_eval_bbox/AP_small
+Test/coco_eval_bbox/AP_medium
+Test/coco_eval_bbox/AP_large
+Test/coco_eval_keypoints/AP
+Test/coco_eval_keypoints/AP50
+Test/coco_eval_keypoints/AP75
+Test/coco_eval_keypoints/AP_medium
+Test/coco_eval_keypoints/AP_large
+```
+
+The remaining named AR metrics are logged in the same groups. Start TensorBoard with `tensorboard --logdir outputs/ecdetpose_s_vehicle_31kpts/summary` (or the configured output directory's `summary` folder).
+
+For pose ranking, `bbox_keypoint` follows the MMPose strategy: it multiplies the detection score by the mean confidence of keypoints above `keypoint_score_thr`. Set `keypoint_score_mode: bbox` to reproduce bbox-only ranking, or `keypoint` to rank only by mean keypoint confidence. DETR predictions remain NMS-free by design; no additional OKS NMS is applied.
+
+To evaluate a checkpoint without training, run:
 
 ```bash
 python ecdetseg/train.py \

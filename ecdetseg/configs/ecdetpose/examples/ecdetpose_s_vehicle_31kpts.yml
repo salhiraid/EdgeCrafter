@@ -73,6 +73,9 @@ evaluator:
   type: CocoEvaluator
   iou_types: ['bbox', 'keypoints']
   verbose: True
+  # Rank poses like MMPose: bbox score times the mean keypoint confidence > 0.2.
+  keypoint_score_mode: bbox_keypoint
+  keypoint_score_thr: 0.2
   keypoint_oks_sigmas: [
     0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025,
     0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025,
