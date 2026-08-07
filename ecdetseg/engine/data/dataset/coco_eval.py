@@ -38,6 +38,15 @@ COCO_METRIC_NAMES = {
         'AP', 'AP50', 'AP75', 'AP_medium', 'AP_large',
         'AR', 'AR50', 'AR75', 'AR_medium', 'AR_large',
     ),
+    # Keep the default pixel-distance names in the shared mapping as well as
+    # generating them dynamically in ``metric_names``.  This makes the
+    # TensorBoard/evaluation path compatible with older evaluator instances
+    # whose ``metric_names`` method only indexes this mapping.
+    'pose': (
+        'Precision_5px', 'Recall_5px', 'F1_5px',
+        'Precision_10px', 'Recall_10px', 'F1_10px',
+        'Visibility_Precision', 'Visibility_Recall', 'Visibility_F1',
+    ),
 }
 
 
@@ -126,41 +135,6 @@ class CocoEvaluator(object):
             for threshold in self.keypoint_distance_thresholds
         }
         self.visibility_counts = {'tp': 0, 'fp': 0, 'fn': 0}
-
-    def _prepare_keypoint_ground_truth(self):
-        """Make bbox-only annotations valid ignored entries for COCO keypoint eval."""
-        fallback_keypoints = len(self.keypoint_oks_sigmas or [])
-        category_keypoints = {
-            category['id']: len(category.get('keypoints', [])) or fallback_keypoints
-            for category in self.coco_gt.dataset.get('categories', [])
-        }
-        for annotation in self.coco_gt.dataset.get('annotations', []):
-            num_keypoints = category_keypoints.get(annotation.get('category_id'), fallback_keypoints)
-            if not annotation.get('keypoints'):
-                annotation['keypoints'] = [0.0] * (num_keypoints * 3)
-                annotation['num_keypoints'] = 0
-            else:
-                annotation['num_keypoints'] = int(annotation.get(
-                    'num_keypoints', sum(v > 0 for v in annotation['keypoints'][2::3])))
-        self.coco_gt.createIndex()
-
-    def _make_coco_eval(self, iou_type):
-        coco_eval = COCOeval(self.coco_gt, iouType=iou_type)
-        if iou_type == 'keypoints' and self.keypoint_oks_sigmas is not None:
-            sigmas = np.asarray(self.keypoint_oks_sigmas, dtype=np.float64)
-            expected = max(
-                (len(category.get('keypoints', [])) for category in self.coco_gt.dataset.get('categories', [])),
-                default=0,
-            )
-            if expected and len(sigmas) != expected:
-                raise ValueError(
-                    f'keypoint_oks_sigmas has {len(sigmas)} values, but COCO categories define {expected} keypoints')
-            coco_eval.params.kpt_oks_sigmas = sigmas
-        return coco_eval
-
-    @staticmethod
-    def metric_names(iou_type):
-        return COCO_METRIC_NAMES[iou_type]
 
     def cleanup(self):
         self.coco_eval = {}

@@ -117,3 +117,11 @@ def test_pose_metrics_and_prediction_visualizations_are_wired():
         assert name in evaluator_source
     assert "prediction_visualizations" in engine_source
     assert "max_visualizations=10" in solver_source
+
+
+def test_default_pose_metric_names_are_registered():
+    evaluator_source = (ROOT / "engine" / "data" / "dataset" / "coco_eval.py").read_text(encoding="utf-8")
+    for name in (
+            "Precision_5px", "Recall_5px", "F1_5px",
+            "Precision_10px", "Recall_10px", "F1_10px"):
+        assert repr(name) in evaluator_source

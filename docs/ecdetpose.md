@@ -205,6 +205,12 @@ Test/pose_eval/Visibility_F1
 
 The remaining named AR metrics are logged in the same groups. Start TensorBoard with `tensorboard --logdir outputs/ecdetpose_s_vehicle_31kpts/summary` (or the configured output directory's `summary` folder).
 
+If evaluation raises `KeyError: 'pose'` from `metric_names`, the runtime is
+mixing an older `coco_eval.py` with the newer solver. Update both files from
+the same revision. The default `pose` names are also registered directly in
+`COCO_METRIC_NAMES` so the 5 px and 10 px metrics remain compatible with that
+older name-lookup path.
+
 For pose ranking, `bbox_keypoint` follows the MMPose strategy: it multiplies the detection score by the mean confidence of keypoints above `keypoint_score_thr`. Set `keypoint_score_mode: bbox` to reproduce bbox-only ranking, or `keypoint` to rank only by mean keypoint confidence. DETR predictions remain NMS-free by design; no additional OKS NMS is applied.
 
 The pixel-distance metrics first retain detections with score at least `pose_detection_score_thr`, then greedily match predictions to same-category ground truths at `keypoint_match_iou_thr`. A labeled ground-truth keypoint (`v > 0`) is a true positive at 5 px or 10 px only when its predicted visibility confidence is at least `keypoint_visibility_thr` and its Euclidean image-space error is within that distance. Missed or inaccurate labeled joints are false negatives; inaccurate confident joints and joints from unmatched detections are false positives. Visibility precision/recall/F1 treats `v=2` as visible and `v=0/1` as not visible. Bbox-only annotations are excluded from all pose and visibility counts.
