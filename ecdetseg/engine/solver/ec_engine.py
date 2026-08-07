@@ -139,6 +139,7 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
     # iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessor.keys())
     iou_types = coco_evaluator.iou_types
     visualized = 0
+    validation_image_root = getattr(data_loader.dataset, 'img_folder', None)
     # coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
@@ -157,7 +158,8 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
                 samples, targets, results, writer, output_dir, epoch,
                 max_visualizations - visualized,
                 coco_evaluator.keypoint_visibility_thr,
-                coco_evaluator.pose_detection_score_thr)
+                coco_evaluator.pose_detection_score_thr,
+                validation_image_root, coco_evaluator.coco_gt)
 
         # if 'segm' in postprocessor.keys():
         #     target_sizes = torch.stack([t["size"] for t in targets], dim=0)
@@ -230,7 +232,8 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor,
 
 
 def _visualize_predictions(samples, targets, results, writer, output_dir, epoch,
-                           limit, keypoint_visibility_thr, detection_score_thr):
+                           limit, keypoint_visibility_thr, detection_score_thr,
+                           image_root=None, coco_gt=None):
     """Render bbox/keypoint predictions to TensorBoard and JPEG files."""
     if limit <= 0 or (writer is None and output_dir is None):
         return 0
@@ -245,9 +248,13 @@ def _visualize_predictions(samples, targets, results, writer, output_dir, epoch,
     for sample, target, result in zip(samples, targets, results):
         if saved >= limit:
             break
-        image_tensor = ((sample.detach().cpu() * std.cpu()) + mean.cpu()).clamp(0, 1)
-        image_array = (image_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-        image = Image.fromarray(image_array)
+        image_id = int(target['image_id'].item())
+        image = _load_original_validation_image(image_root, coco_gt, image_id)
+        if image is None:
+            image_tensor = ((sample.detach().cpu() * std.cpu()) + mean.cpu()).clamp(0, 1)
+            image_array = (image_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            image = Image.fromarray(image_array)
+        image_array = np.asarray(image)
         draw = ImageDraw.Draw(image)
         input_h, input_w = image_array.shape[:2]
         orig_w, orig_h = target['orig_size'].detach().cpu().tolist()
@@ -289,7 +296,6 @@ def _visualize_predictions(samples, targets, results, writer, output_dir, epoch,
                                  fill=color, outline=(255, 255, 255))
                     draw.text((px + radius + 1, py), str(keypoint_index), fill=color)
 
-        image_id = int(target['image_id'].item())
         if save_dir is not None:
             image.save(save_dir / f'image_{image_id}.jpg', quality=90)
         if writer is not None:
@@ -298,3 +304,16 @@ def _visualize_predictions(samples, targets, results, writer, output_dir, epoch,
                 global_step=int(epoch), dataformats='HWC')
         saved += 1
     return saved
+
+
+def _load_original_validation_image(image_root, coco_gt, image_id):
+    """Load an untouched validation image using its COCO file name."""
+    if image_root is None or coco_gt is None:
+        return None
+    image_info = coco_gt.imgs.get(image_id)
+    if not image_info or not image_info.get('file_name'):
+        return None
+    image_path = Path(image_root) / image_info['file_name']
+    if not image_path.is_file():
+        return None
+    return Image.open(image_path).convert('RGB')

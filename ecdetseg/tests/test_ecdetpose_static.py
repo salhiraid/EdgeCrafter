@@ -123,6 +123,8 @@ def test_pose_metrics_and_prediction_visualizations_are_wired():
     for name in ("Precision_", "Recall_", "F1_", "Visibility_Precision", "Visibility_Recall"):
         assert name in evaluator_source
     assert "prediction_visualizations" in engine_source
+    assert "_load_original_validation_image" in engine_source
+    assert "validation_image_root" in engine_source
     assert "max_visualizations=10" in solver_source
     assert "color = (255, 64, 64) if confident else (255, 165, 0)" in engine_source
     assert "self._write_eval_metrics(test_stats" in solver_source

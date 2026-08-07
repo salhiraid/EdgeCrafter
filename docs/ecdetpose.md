@@ -244,6 +244,10 @@ Performance/Keypoints_PerJoint/front_light_left/Visibility_Accuracy
 ```
 
 Every validation pass also renders up to 10 images with green predicted boxes.
+The renderer resolves each `image_id` through the validation COCO metadata and
+loads `val_dataloader.dataset.img_folder / file_name`, so both the saved JPEG
+and the TensorBoard image use the **original image resolution**. It falls back
+to the transformed model input only when the original file cannot be found.
 All predicted keypoints belonging to retained boxes are drawn: red means the
 visibility score passed `keypoint_visibility_thr`, while orange means the
 keypoint branch produced a coordinate but its visibility score is below the
