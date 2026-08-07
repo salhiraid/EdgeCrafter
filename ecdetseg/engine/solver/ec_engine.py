@@ -273,13 +273,21 @@ def _visualize_predictions(samples, targets, results, writer, output_dir, epoch,
             draw.text((box_scaled[0], max(0, box_scaled[1] - 12)),
                       f'{int(label)} {float(score):.2f}', fill=(0, 255, 0))
             if keypoints is not None:
-                for (x, y), kp_score in zip(keypoints[index].tolist(), keypoint_scores[index].tolist()):
-                    if kp_score < keypoint_visibility_thr:
-                        continue
+                for keypoint_index, ((x, y), kp_score) in enumerate(zip(
+                        keypoints[index].tolist(), keypoint_scores[index].tolist())):
                     px, py = x * scale_x, y * scale_y
-                    radius = 2
+                    if not (0 <= px < input_w and 0 <= py < input_h):
+                        continue
+                    # Always render predicted joints so an untrained/low-score
+                    # visibility head cannot make TensorBoard look as if the
+                    # keypoint branch is missing. Red means visible according
+                    # to the evaluation threshold; orange means below it.
+                    confident = kp_score >= keypoint_visibility_thr
+                    color = (255, 64, 64) if confident else (255, 165, 0)
+                    radius = 3 if confident else 2
                     draw.ellipse((px - radius, py - radius, px + radius, py + radius),
-                                 fill=(255, 64, 64), outline=(255, 255, 255))
+                                 fill=color, outline=(255, 255, 255))
+                    draw.text((px + radius + 1, py), str(keypoint_index), fill=color)
 
         image_id = int(target['image_id'].item())
         if save_dir is not None:

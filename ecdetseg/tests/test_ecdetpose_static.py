@@ -104,7 +104,10 @@ def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():
 def test_tensorboard_uses_named_coco_metrics():
     solver_source = (ROOT / "engine" / "solver" / "ec_solver.py").read_text(encoding="utf-8")
     evaluator_source = (ROOT / "engine" / "data" / "dataset" / "coco_eval.py").read_text(encoding="utf-8")
-    assert "Test/{k}/{metric_name}" in solver_source
+    assert "Performance/BBox" in solver_source
+    assert "Performance/Keypoints_COCO_OKS" in solver_source
+    assert "Performance/Keypoints_Pixel" in solver_source
+    assert "{tensorboard_group}/{metric_name}" in solver_source
     for name in ("AP50", "AP75", "AP_small", "AP_medium", "AP_large", "AR_medium", "AR_large"):
         assert repr(name) in evaluator_source
 
@@ -117,6 +120,8 @@ def test_pose_metrics_and_prediction_visualizations_are_wired():
         assert name in evaluator_source
     assert "prediction_visualizations" in engine_source
     assert "max_visualizations=10" in solver_source
+    assert "color = (255, 64, 64) if confident else (255, 165, 0)" in engine_source
+    assert "self._write_eval_metrics(test_stats" in solver_source
 
 
 def test_default_pose_metric_names_are_registered():

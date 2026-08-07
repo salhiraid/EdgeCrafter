@@ -181,27 +181,31 @@ During training, validation runs after every epoch and prints the standard COCO 
 The same arrays are appended to `outputs/ecdetpose_s_vehicle_31kpts/log.txt` as `test_coco_eval_bbox` and `test_coco_eval_keypoints`. TensorBoard records every value with a readable name rather than a numeric suffix:
 
 ```text
-Test/coco_eval_bbox/AP
-Test/coco_eval_bbox/AP50
-Test/coco_eval_bbox/AP75
-Test/coco_eval_bbox/AP_small
-Test/coco_eval_bbox/AP_medium
-Test/coco_eval_bbox/AP_large
-Test/coco_eval_keypoints/AP
-Test/coco_eval_keypoints/AP50
-Test/coco_eval_keypoints/AP75
-Test/coco_eval_keypoints/AP_medium
-Test/coco_eval_keypoints/AP_large
-Test/pose_eval/Precision_5px
-Test/pose_eval/Recall_5px
-Test/pose_eval/F1_5px
-Test/pose_eval/Precision_10px
-Test/pose_eval/Recall_10px
-Test/pose_eval/F1_10px
-Test/pose_eval/Visibility_Precision
-Test/pose_eval/Visibility_Recall
-Test/pose_eval/Visibility_F1
+Performance/BBox/AP
+Performance/BBox/AP50
+Performance/BBox/AP75
+Performance/BBox/AP_small
+Performance/BBox/AP_medium
+Performance/BBox/AP_large
+Performance/Keypoints_COCO_OKS/AP
+Performance/Keypoints_COCO_OKS/AP50
+Performance/Keypoints_COCO_OKS/AP75
+Performance/Keypoints_COCO_OKS/AP_medium
+Performance/Keypoints_COCO_OKS/AP_large
+Performance/Keypoints_Pixel/Precision_5px
+Performance/Keypoints_Pixel/Recall_5px
+Performance/Keypoints_Pixel/F1_5px
+Performance/Keypoints_Pixel/Precision_10px
+Performance/Keypoints_Pixel/Recall_10px
+Performance/Keypoints_Pixel/F1_10px
+Performance/Keypoints_Pixel/Visibility_Precision
+Performance/Keypoints_Pixel/Visibility_Recall
+Performance/Keypoints_Pixel/Visibility_F1
 ```
+
+TensorBoard therefore shows bbox performance, COCO-OKS keypoint performance,
+and pixel-distance keypoint performance as three independent groups. They are
+not averaged or merged together.
 
 The remaining named AR metrics are logged in the same groups. Start TensorBoard with `tensorboard --logdir outputs/ecdetpose_s_vehicle_31kpts/summary` (or the configured output directory's `summary` folder).
 
@@ -215,11 +219,23 @@ For pose ranking, `bbox_keypoint` follows the MMPose strategy: it multiplies the
 
 The pixel-distance metrics first retain detections with score at least `pose_detection_score_thr`, then greedily match predictions to same-category ground truths at `keypoint_match_iou_thr`. A labeled ground-truth keypoint (`v > 0`) is a true positive at 5 px or 10 px only when its predicted visibility confidence is at least `keypoint_visibility_thr` and its Euclidean image-space error is within that distance. Missed or inaccurate labeled joints are false negatives; inaccurate confident joints and joints from unmatched detections are false positives. Visibility precision/recall/F1 treats `v=2` as visible and `v=0/1` as not visible. Bbox-only annotations are excluded from all pose and visibility counts.
 
-Every validation pass also renders up to 10 images with green predicted boxes and red visible predicted keypoints. The images appear in TensorBoard under `Validation_predictions` and are saved as JPEGs under:
+Every validation pass also renders up to 10 images with green predicted boxes.
+All predicted keypoints belonging to retained boxes are drawn: red means the
+visibility score passed `keypoint_visibility_thr`, while orange means the
+keypoint branch produced a coordinate but its visibility score is below the
+threshold. Keypoint indices are printed next to the points. This makes a weak
+or newly initialized visibility head visible during debugging instead of
+producing apparently empty images. The images appear in TensorBoard under
+`Validation_predictions` and are saved as JPEGs under:
 
 ```text
 <output_dir>/prediction_visualizations/epoch_XXXX/image_<image_id>.jpg
 ```
+
+Named evaluation scalars are written during both epoch validation and
+`--test-only` validation. If no boxes or keypoints appear in the images, lower
+`pose_detection_score_thr`; this threshold selects the object queries rendered
+and included in the pixel-distance metrics.
 
 To evaluate a checkpoint without training, run:
 
