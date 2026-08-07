@@ -44,6 +44,7 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
         self.ann_file = ann_file
         self.return_masks = return_masks
         self.remap_mscoco_category = remap_mscoco_category
+        self._category2label_override = None
 
     def _infer_num_keypoints(self):
         categories = self.coco.dataset.get('categories', [])
@@ -69,7 +70,10 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
         image_id = self.ids[idx]
         target = {'image_id': image_id, 'annotations': target}
 
-        if self.remap_mscoco_category:
+        if self._category2label_override is not None:
+            image, target = self.prepare(
+                image, target, category2label=self._category2label_override)
+        elif self.remap_mscoco_category:
             image, target = self.prepare(image, target, category2label=mscoco_category2label)
         else:
             image, target = self.prepare(image, target)
@@ -83,6 +87,22 @@ class CocoDetection(torchvision.datasets.CocoDetection, DetDataset):
             target['masks'] = convert_to_tv_tensor(target['masks'], key='masks')
 
         return image, target
+
+    def set_category_name_mapping(self, category_names):
+        """Map this dataset's category ids to shared contiguous labels."""
+        name_to_label = {name: index for index, name in enumerate(category_names)}
+        dataset_names = {category['name'] for category in self.categories}
+        expected_names = set(category_names)
+        if dataset_names != expected_names:
+            missing = sorted(expected_names - dataset_names)
+            extra = sorted(dataset_names - expected_names)
+            raise ValueError(
+                f'Category names do not match the weighted dataset schema for {self.ann_file}. '
+                f'Missing={missing}, extra={extra}')
+        self._category2label_override = {
+            category['id']: name_to_label[category['name']]
+            for category in self.categories
+        }
 
     def extra_repr(self) -> str:
         s = f' img_folder: {self.img_folder}\n ann_file: {self.ann_file}\n'

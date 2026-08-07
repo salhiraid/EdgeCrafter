@@ -37,8 +37,11 @@ class WeightedMultiDataset(data.Dataset):
     """
 
     __inject__ = ['datasets', 'transforms']
+    __share__ = ['num_classes']
 
-    def __init__(self, datasets, weights, transforms=None, samples_per_epoch=None, seed=0):
+    def __init__(self, datasets, weights, transforms=None, samples_per_epoch=None,
+                 seed=0, category_names=None, remap_categories_by_name=True,
+                 num_classes=None):
         if not datasets:
             raise ValueError('WeightedMultiDataset requires at least one dataset')
         if len(datasets) != len(weights):
@@ -51,6 +54,13 @@ class WeightedMultiDataset(data.Dataset):
             raise ValueError('weights must be finite, non-negative, and contain at least one positive value')
 
         self.datasets = list(datasets)
+        self.category_names = self._configure_category_mapping(
+            category_names, remap_categories_by_name)
+        if num_classes is not None and self.category_names is not None \
+                and len(self.category_names) != int(num_classes):
+            raise ValueError(
+                f'Weighted dataset defines {len(self.category_names)} categories '
+                f'{self.category_names}, but num_classes={num_classes}')
         self.transforms = transforms
         # CocoDetection and the solver historically expose the composed
         # augmentation pipeline as ``_transforms``. Keep that dataset
@@ -62,6 +72,26 @@ class WeightedMultiDataset(data.Dataset):
             raise ValueError('samples_per_epoch must be positive')
         self.seed = int(seed)
         self._epoch = 0
+
+    def _configure_category_mapping(self, category_names, enabled):
+        if not enabled:
+            return list(category_names) if category_names is not None else None
+        if category_names is None:
+            first_categories = getattr(self.datasets[0], 'categories', None)
+            if first_categories is None:
+                raise ValueError(
+                    'category_names is required when a component dataset has no COCO categories')
+            category_names = [category['name'] for category in first_categories]
+        category_names = list(category_names)
+        if len(category_names) != len(set(category_names)):
+            raise ValueError(f'category_names contains duplicates: {category_names}')
+        for dataset in self.datasets:
+            setter = getattr(dataset, 'set_category_name_mapping', None)
+            if setter is None:
+                raise TypeError(
+                    f'{type(dataset).__name__} cannot remap categories by name')
+            setter(category_names)
+        return category_names
 
     def __len__(self):
         return self.samples_per_epoch
@@ -76,6 +106,7 @@ class WeightedMultiDataset(data.Dataset):
         dataset_index = int(torch.multinomial(self.weights, 1, generator=generator).item())
         local_index = int(torch.randint(len(self.datasets[dataset_index]), (1,), generator=generator).item())
         image, target = self.datasets[dataset_index][local_index]
+        target['dataset_index'] = torch.tensor(dataset_index, dtype=torch.int64)
         if self.transforms is not None:
             image, target = self.transforms(image, target)
         return image, target

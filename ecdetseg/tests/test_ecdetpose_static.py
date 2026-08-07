@@ -86,6 +86,7 @@ def test_five_dataset_weighted_config():
     assert len(dataset["weights"]) == 5
     assert sum(dataset["weights"]) == pytest.approx(1.0)
     assert dataset["samples_per_epoch"] > 0
+    assert dataset["remap_categories_by_name"] is True
 
 
 def test_five_dataset_include_replaces_coco_dataset_node():
@@ -120,6 +121,22 @@ def test_weighted_dataset_matches_solver_transform_interface():
     assert "self._transforms = transforms" in dataset_source
     assert "getattr(train_dataset, '_transforms', None)" in solver_source
     assert "getattr(train_dataset, 'transforms', None)" in solver_source
+
+
+def test_weighted_dataset_remaps_and_validates_category_labels():
+    dataset_source = (ROOT / "engine" / "data" / "dataset" / "_dataset.py").read_text(
+        encoding="utf-8")
+    coco_source = (ROOT / "engine" / "data" / "dataset" / "coco_dataset.py").read_text(
+        encoding="utf-8")
+    engine_source = (ROOT / "engine" / "solver" / "ec_engine.py").read_text(
+        encoding="utf-8")
+    denoising_source = (ROOT / "engine" / "edgecrafter" / "denoising.py").read_text(
+        encoding="utf-8")
+    assert "remap_categories_by_name=True" in dataset_source
+    assert "__share__ = ['num_classes']" in dataset_source
+    assert "set_category_name_mapping" in coco_source
+    assert "_validate_target_labels(targets, criterion.num_classes)" in engine_source
+    assert "Denoising target labels must be in" in denoising_source
 
 
 def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():

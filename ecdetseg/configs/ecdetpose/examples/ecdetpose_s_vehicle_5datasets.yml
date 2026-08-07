@@ -11,6 +11,10 @@ train_dataloader:
     weights: [0.35, 0.25, 0.20, 0.12, 0.08]
     samples_per_epoch: 50000
     seed: 42
+    # Category ids may differ across JSON files. They are remapped by category
+    # name to the contiguous order from dataset 1. To force an order, set:
+    # category_names: [class_0, class_1, class_2, class_3, class_4]
+    remap_categories_by_name: true
     datasets:
       - type: CocoDetection
         img_folder: <PATH_TO_DATASET_1_IMAGES>

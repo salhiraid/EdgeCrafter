@@ -44,6 +44,7 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        _validate_target_labels(targets, criterion.num_classes)
         global_step = epoch * len(data_loader) + i
         metas = dict(epoch=epoch, step=i, global_step=global_step, epoch_step=len(data_loader))
 
@@ -122,6 +123,25 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+
+def _validate_target_labels(targets, num_classes):
+    """Fail on CPU with context instead of an asynchronous CUDA gather assert."""
+    for batch_index, target in enumerate(targets):
+        labels = target.get('labels')
+        if labels is None or labels.numel() == 0:
+            continue
+        invalid = (labels < 0) | (labels >= num_classes)
+        if invalid.any():
+            invalid_labels = sorted(set(labels[invalid].detach().cpu().tolist()))
+            dataset_index = target.get('dataset_index')
+            dataset_index = int(dataset_index.item()) if dataset_index is not None else 'unknown'
+            image_id = target.get('image_id')
+            image_id = int(image_id.item()) if image_id is not None else 'unknown'
+            raise ValueError(
+                f'Target labels must be in [0, {num_classes - 1}], but found {invalid_labels} '
+                f'at batch_index={batch_index}, dataset_index={dataset_index}, image_id={image_id}. '
+                'Use a shared contiguous category-name mapping for every component dataset.')
 
 
 @torch.no_grad()

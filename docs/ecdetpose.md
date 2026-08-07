@@ -169,6 +169,17 @@ both `transforms` and the legacy `_transforms` attribute expected by
 if `_transforms` is missing, update `engine/data/dataset/_dataset.py` and
 `engine/solver/ec_solver.py` together.
 
+The wrapper also remaps every component COCO `category_id` to one shared,
+contiguous label space by category name. By default, the category order in the
+first JSON becomes labels `0..C-1`; all other JSON files must contain the same
+category-name set. Set `category_names` on `WeightedMultiDataset` to make the
+order explicit. Its length must equal `num_classes`. This prevents raw COCO ids
+such as `7` from reaching a five-class denoising/gather kernel, which otherwise
+causes a delayed CUDA `vectorized_gather_kernel index out of bounds` assertion.
+The training loop additionally validates every target label before model
+forward and reports the dataset index and image id in a synchronous Python
+error if a label is outside `[0, num_classes - 1]`.
+
 ## COCO Evaluation Metrics
 
 The vehicle example evaluates both detection and pose on the single dataset configured under `val_dataloader`:
