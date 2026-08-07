@@ -155,6 +155,13 @@ The weights are **dataset-level sampling probabilities**, not per-image weights.
 
 `WeightedMultiDataset` maps every virtual sample index deterministically from `seed`, epoch, and index. Single-process training uses the normal shuffled loader. Distributed training continues to use the project's `DistributedSampler`, which shards those virtual indices across ranks while preserving the same global weighted mixture. All component datasets must use the same category-label mapping and the same 31-keypoint order. Bbox-only annotations are allowed because the loader supplies ignored keypoint placeholders.
 
+The five-dataset config changes the inherited dataset `type` from
+`CocoDetection` to `WeightedMultiDataset`. Config merging treats that type
+change as a complete node replacement, so inherited `img_folder`, `ann_file`,
+and `num_keypoints` fields are not passed to `WeightedMultiDataset`. If you see
+`unexpected keyword argument 'img_folder'`, update `engine/core/yaml_utils.py`
+and the five-dataset config from the same revision.
+
 ## COCO Evaluation Metrics
 
 The vehicle example evaluates both detection and pose on the single dataset configured under `val_dataloader`:

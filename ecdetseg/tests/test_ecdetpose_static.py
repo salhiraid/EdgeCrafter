@@ -2,6 +2,7 @@ import json
 import importlib.util
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,30 @@ def test_five_dataset_weighted_config():
     assert len(dataset["weights"]) == 5
     assert sum(dataset["weights"]) == pytest.approx(1.0)
     assert dataset["samples_per_epoch"] > 0
+
+
+def test_five_dataset_include_replaces_coco_dataset_node():
+    pytest.importorskip("yaml")
+    core_root = ROOT / "engine" / "core"
+    package = types.ModuleType("_config_test_engine")
+    package.__path__ = []
+    sys.modules[package.__name__] = package
+    core_package = types.ModuleType("_config_test_engine.core")
+    core_package.__path__ = [str(core_root)]
+    sys.modules[core_package.__name__] = core_package
+    for module_name in ("workspace", "yaml_utils"):
+        full_name = f"_config_test_engine.core.{module_name}"
+        spec = importlib.util.spec_from_file_location(full_name, core_root / f"{module_name}.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[full_name] = module
+        spec.loader.exec_module(module)
+
+    load_config = sys.modules["_config_test_engine.core.yaml_utils"].load_config
+    config = load_config(str(ROOT / "configs" / "ecdetpose" / "examples" /
+                             "ecdetpose_s_vehicle_5datasets.yml"))
+    dataset = config["train_dataloader"]["dataset"]
+    assert dataset["type"] == "WeightedMultiDataset"
+    assert not {"img_folder", "ann_file", "num_keypoints"}.intersection(dataset)
 
 
 def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():
