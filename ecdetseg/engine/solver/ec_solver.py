@@ -53,7 +53,11 @@ class ECSolver(BaseSolver):
                 self.postprocessor,
                 self.val_dataloader,
                 self.evaluator,
-                self.device
+                self.device,
+                writer=self.writer,
+                output_dir=self.output_dir,
+                epoch=self.last_epoch,
+                max_visualizations=10,
             )
             for k in test_stats:
                 best_stat['epoch'] = self.last_epoch
@@ -115,14 +119,17 @@ class ECSolver(BaseSolver):
                 self.postprocessor,
                 self.val_dataloader,
                 self.evaluator,
-                self.device
+                self.device,
+                writer=self.writer,
+                output_dir=self.output_dir,
+                epoch=epoch,
+                max_visualizations=10,
             )
 
-            for k in test_stats:
-                if self.writer and dist_utils.is_main_process():
-                    for i, v in enumerate(test_stats[k]):
-                        self.writer.add_scalar(f'Test/{k}_{i}'.format(k), v, epoch)
+            if self.writer and dist_utils.is_main_process():
+                self._write_eval_metrics(test_stats, epoch)
 
+            for k in test_stats:
                 if k in best_stat:
                     best_stat['epoch'] = epoch if test_stats[k][0] > best_stat[k] else best_stat['epoch']
                     best_stat[k] = max(best_stat[k], test_stats[k][0])
@@ -173,9 +180,37 @@ class ECSolver(BaseSolver):
 
         module = self.ema.module if self.ema else self.model
         test_stats, coco_evaluator = evaluate(module, self.criterion, self.postprocessor,
-                self.val_dataloader, self.evaluator, self.device)
+                self.val_dataloader, self.evaluator, self.device,
+                writer=self.writer, output_dir=self.output_dir,
+                epoch=max(self.last_epoch, 0), max_visualizations=10)
+
+        if self.writer and dist_utils.is_main_process():
+            self._write_eval_metrics(test_stats, max(self.last_epoch, 0))
 
         if self.output_dir:
             dist_utils.save_on_master(coco_evaluator.coco_eval[self.iou_type].eval, self.output_dir / "eval.pth")
 
         return
+
+    def _write_eval_metrics(self, test_stats, epoch):
+        """Write named COCO and pixel-distance metrics to TensorBoard."""
+        metric_types = {
+            'coco_eval_bbox': ('bbox', 'Performance/BBox'),
+            'coco_eval_mask': ('segm', 'Performance/Segmentation'),
+            'coco_eval_keypoints': ('keypoints', 'Performance/Keypoints_COCO_OKS'),
+            'pose_eval': ('pose', 'Performance/Keypoints_Pixel'),
+        }
+        for group, values in test_stats.items():
+            metric_info = metric_types.get(group)
+            iou_type, tensorboard_group = metric_info if metric_info else (None, f'Performance/{group}')
+            metric_names = self.evaluator.metric_names(iou_type) if iou_type else ()
+            for index, value in enumerate(values):
+                metric_name = metric_names[index] if index < len(metric_names) else str(index)
+                self.writer.add_scalar(f'{tensorboard_group}/{metric_name}', value, epoch)
+
+        for metric_name, values in self.evaluator.pose_per_keypoint_metrics().items():
+            for keypoint_name, value in zip(self.evaluator.keypoint_names, values):
+                safe_name = keypoint_name.replace('/', '_')
+                self.writer.add_scalar(
+                    f'Performance/Keypoints_PerJoint/{safe_name}/{metric_name}',
+                    float(value), epoch)
