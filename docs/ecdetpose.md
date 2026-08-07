@@ -170,6 +170,9 @@ evaluator:
   keypoint_visibility_thr: 0.5
   keypoint_match_iou_thr: 0.5
   pose_detection_score_thr: 0.3
+  pose_crop_size: 512
+  pose_crop_margin: 0.05
+  pose_min_bbox_size: 128
   keypoint_oks_sigmas: [0.025, ...]  # exactly 31 values
 ```
 
@@ -201,6 +204,9 @@ Performance/Keypoints_Pixel/F1_10px
 Performance/Keypoints_Pixel/Visibility_Precision
 Performance/Keypoints_Pixel/Visibility_Recall
 Performance/Keypoints_Pixel/Visibility_F1
+Performance/Keypoints_Pixel/Visibility_Accuracy
+Performance/Keypoints_Pixel/Matched_Instances
+Performance/Keypoints_Pixel/Eligible_GT_Instances
 ```
 
 TensorBoard therefore shows bbox performance, COCO-OKS keypoint performance,
@@ -217,7 +223,25 @@ older name-lookup path.
 
 For pose ranking, `bbox_keypoint` follows the MMPose strategy: it multiplies the detection score by the mean confidence of keypoints above `keypoint_score_thr`. Set `keypoint_score_mode: bbox` to reproduce bbox-only ranking, or `keypoint` to rank only by mean keypoint confidence. DETR predictions remain NMS-free by design; no additional OKS NMS is applied.
 
-The pixel-distance metrics first retain detections with score at least `pose_detection_score_thr`, then greedily match predictions to same-category ground truths at `keypoint_match_iou_thr`. A labeled ground-truth keypoint (`v > 0`) is a true positive at 5 px or 10 px only when its predicted visibility confidence is at least `keypoint_visibility_thr` and its Euclidean image-space error is within that distance. Missed or inaccurate labeled joints are false negatives; inaccurate confident joints and joints from unmatched detections are false positives. Visibility precision/recall/F1 treats `v=2` as visible and `v=0/1` as not visible. Bbox-only annotations are excluded from all pose and visibility counts.
+The pixel-distance metrics mirror the supplied MMDetection evaluation. They
+first retain detections with score at least `pose_detection_score_thr`, then
+greedily match predictions to same-category ground truths at
+`keypoint_match_iou_thr`. Instances smaller than `pose_min_bbox_size` are
+excluded. Each matched bbox is expanded by `pose_crop_margin`, projected into
+an aspect-ratio-preserving `pose_crop_size × pose_crop_size` crop, and the 5 px
+and 10 px distances are measured in that crop space. Only visible ground-truth
+joints (`v=2`) enter coordinate precision/recall/F1. Visibility metrics treat
+`v=2` as visible and `v=0/1` as not visible. Bbox-only annotations are excluded.
+The aggregate curves are macro averages across keypoint indices, matching the
+reference implementation rather than pooling every joint into one micro count.
+
+TensorBoard also exposes every joint separately under paths such as:
+
+```text
+Performance/Keypoints_PerJoint/front_light_left/Precision_5px
+Performance/Keypoints_PerJoint/front_light_left/Recall_10px
+Performance/Keypoints_PerJoint/front_light_left/Visibility_Accuracy
+```
 
 Every validation pass also renders up to 10 images with green predicted boxes.
 All predicted keypoints belonging to retained boxes are drawn: red means the

@@ -99,6 +99,9 @@ def test_vehicle_config_enables_coco_bbox_and_keypoint_metrics():
     assert evaluator["keypoint_distance_thresholds"] == [5, 10]
     assert evaluator["keypoint_visibility_thr"] == pytest.approx(0.5)
     assert evaluator["pose_detection_score_thr"] == pytest.approx(0.3)
+    assert evaluator["pose_crop_size"] == 512
+    assert evaluator["pose_crop_margin"] == pytest.approx(0.05)
+    assert evaluator["pose_min_bbox_size"] == 128
 
 
 def test_tensorboard_uses_named_coco_metrics():
@@ -108,6 +111,7 @@ def test_tensorboard_uses_named_coco_metrics():
     assert "Performance/Keypoints_COCO_OKS" in solver_source
     assert "Performance/Keypoints_Pixel" in solver_source
     assert "{tensorboard_group}/{metric_name}" in solver_source
+    assert "Performance/Keypoints_PerJoint" in solver_source
     for name in ("AP50", "AP75", "AP_small", "AP_medium", "AP_large", "AR_medium", "AR_large"):
         assert repr(name) in evaluator_source
 
@@ -130,3 +134,5 @@ def test_default_pose_metric_names_are_registered():
             "Precision_5px", "Recall_5px", "F1_5px",
             "Precision_10px", "Recall_10px", "F1_10px"):
         assert repr(name) in evaluator_source
+    assert "Visibility_Accuracy" in evaluator_source
+    assert "pose_per_keypoint_metrics" in evaluator_source

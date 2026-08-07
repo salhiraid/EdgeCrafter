@@ -207,3 +207,10 @@ class ECSolver(BaseSolver):
             for index, value in enumerate(values):
                 metric_name = metric_names[index] if index < len(metric_names) else str(index)
                 self.writer.add_scalar(f'{tensorboard_group}/{metric_name}', value, epoch)
+
+        for metric_name, values in self.evaluator.pose_per_keypoint_metrics().items():
+            for keypoint_name, value in zip(self.evaluator.keypoint_names, values):
+                safe_name = keypoint_name.replace('/', '_')
+                self.writer.add_scalar(
+                    f'Performance/Keypoints_PerJoint/{safe_name}/{metric_name}',
+                    float(value), epoch)

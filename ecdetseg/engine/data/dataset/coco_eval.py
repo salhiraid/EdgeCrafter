@@ -46,6 +46,7 @@ COCO_METRIC_NAMES = {
         'Precision_5px', 'Recall_5px', 'F1_5px',
         'Precision_10px', 'Recall_10px', 'F1_10px',
         'Visibility_Precision', 'Visibility_Recall', 'Visibility_F1',
+        'Visibility_Accuracy', 'Matched_Instances', 'Eligible_GT_Instances',
     ),
 }
 
@@ -56,7 +57,8 @@ class CocoEvaluator(object):
                  keypoint_score_mode='bbox_keypoint', keypoint_score_thr=0.2,
                  keypoint_distance_thresholds=(5.0, 10.0),
                  keypoint_visibility_thr=0.5, keypoint_match_iou_thr=0.5,
-                 pose_detection_score_thr=0.3):
+                 pose_detection_score_thr=0.3, pose_crop_size=512,
+                 pose_crop_margin=0.05, pose_min_bbox_size=128):
         assert isinstance(iou_types, (list, tuple))
         coco_gt = copy.deepcopy(coco_gt)
         self.coco_gt : COCO = coco_gt
@@ -75,9 +77,13 @@ class CocoEvaluator(object):
         self.keypoint_visibility_thr = float(keypoint_visibility_thr)
         self.keypoint_match_iou_thr = float(keypoint_match_iou_thr)
         self.pose_detection_score_thr = float(pose_detection_score_thr)
+        self.pose_crop_size = int(pose_crop_size)
+        self.pose_crop_margin = float(pose_crop_margin)
+        self.pose_min_bbox_size = float(pose_min_bbox_size)
         if "keypoints" in iou_types:
             self._prepare_keypoint_ground_truth()
         self.labels = [cat['name'] for cat in coco_gt.loadCats(coco_gt.getCatIds())] if verbose else None
+        self.keypoint_names = self._infer_keypoint_names()
 
         self.coco_eval = {}
         for iou_type in iou_types:
@@ -125,16 +131,34 @@ class CocoEvaluator(object):
             for threshold in self.keypoint_distance_thresholds:
                 suffix = f'{threshold:g}px'
                 names.extend((f'Precision_{suffix}', f'Recall_{suffix}', f'F1_{suffix}'))
-            names.extend(('Visibility_Precision', 'Visibility_Recall', 'Visibility_F1'))
+            names.extend((
+                'Visibility_Precision', 'Visibility_Recall', 'Visibility_F1',
+                'Visibility_Accuracy', 'Matched_Instances', 'Eligible_GT_Instances'))
             return tuple(names)
         return COCO_METRIC_NAMES[iou_type]
 
     def _reset_pose_counts(self):
+        num_keypoints = len(self.keypoint_names)
         self.pose_counts = {
-            threshold: {'tp': 0, 'fp': 0, 'fn': 0}
+            threshold: {
+                name: np.zeros(num_keypoints, dtype=np.float64)
+                for name in ('tp', 'fp', 'fn')
+            }
             for threshold in self.keypoint_distance_thresholds
         }
-        self.visibility_counts = {'tp': 0, 'fp': 0, 'fn': 0}
+        self.visibility_counts = {
+            name: np.zeros(num_keypoints, dtype=np.float64)
+            for name in ('tp', 'fp', 'fn', 'tn')
+        }
+        self.num_matched = 0
+        self.num_eligible_gt = 0
+
+    def _infer_keypoint_names(self):
+        for category in self.coco_gt.dataset.get('categories', []):
+            names = category.get('keypoints', [])
+            if names:
+                return list(names)
+        return [f'keypoint_{index}' for index in range(len(self.keypoint_oks_sigmas or []))]
 
     def cleanup(self):
         self.coco_eval = {}
@@ -171,29 +195,66 @@ class CocoEvaluator(object):
         for iou_type in self.iou_types:
             self.eval_imgs[iou_type] = np.concatenate(self.eval_imgs[iou_type], 2)
             create_common_coco_eval(self.coco_eval[iou_type], self.img_ids, self.eval_imgs[iou_type])
-        gathered = all_gather((self.pose_counts, self.visibility_counts))
+        gathered = all_gather((
+            self.pose_counts, self.visibility_counts,
+            self.num_matched, self.num_eligible_gt))
         self._reset_pose_counts()
-        for pose_counts, visibility_counts in gathered:
+        for pose_counts, visibility_counts, num_matched, num_eligible_gt in gathered:
             for threshold, counts in pose_counts.items():
                 for name in ('tp', 'fp', 'fn'):
                     self.pose_counts[threshold][name] += counts[name]
-            for name in ('tp', 'fp', 'fn'):
+            for name in ('tp', 'fp', 'fn', 'tn'):
                 self.visibility_counts[name] += visibility_counts[name]
+            self.num_matched += num_matched
+            self.num_eligible_gt += num_eligible_gt
 
     @staticmethod
     def _precision_recall_f1(counts):
         tp, fp, fn = counts['tp'], counts['fp'], counts['fn']
-        precision = tp / max(tp + fp, 1)
-        recall = tp / max(tp + fn, 1)
-        f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+        precision = np.divide(tp, tp + fp, out=np.zeros_like(tp), where=(tp + fp) > 0)
+        recall = np.divide(tp, tp + fn, out=np.zeros_like(tp), where=(tp + fn) > 0)
+        f1 = np.divide(
+            2 * precision * recall, precision + recall,
+            out=np.zeros_like(precision), where=(precision + recall) > 0)
         return precision, recall, f1
 
     def pose_metric_values(self):
         values = []
         for threshold in self.keypoint_distance_thresholds:
-            values.extend(self._precision_recall_f1(self.pose_counts[threshold]))
-        values.extend(self._precision_recall_f1(self.visibility_counts))
+            values.extend(float(metric.mean()) for metric in self._precision_recall_f1(
+                self.pose_counts[threshold]))
+        visibility = self._precision_recall_f1(self.visibility_counts)
+        values.extend(float(metric.mean()) for metric in visibility)
+        counts = self.visibility_counts
+        total = counts['tp'] + counts['fp'] + counts['fn'] + counts['tn']
+        accuracy = np.divide(
+            counts['tp'] + counts['tn'], total,
+            out=np.zeros_like(total), where=total > 0)
+        values.extend((float(accuracy.mean()), float(self.num_matched), float(self.num_eligible_gt)))
         return values
+
+    def pose_per_keypoint_metrics(self):
+        """Return per-joint coordinate and visibility metrics for TensorBoard."""
+        metrics = {}
+        for threshold in self.keypoint_distance_thresholds:
+            precision, recall, f1 = self._precision_recall_f1(self.pose_counts[threshold])
+            suffix = f'{threshold:g}px'
+            metrics[f'Precision_{suffix}'] = precision
+            metrics[f'Recall_{suffix}'] = recall
+            metrics[f'F1_{suffix}'] = f1
+        precision, recall, f1 = self._precision_recall_f1(self.visibility_counts)
+        counts = self.visibility_counts
+        total = counts['tp'] + counts['fp'] + counts['fn'] + counts['tn']
+        accuracy = np.divide(
+            counts['tp'] + counts['tn'], total,
+            out=np.zeros_like(total), where=total > 0)
+        metrics.update({
+            'Visibility_Precision': precision,
+            'Visibility_Recall': recall,
+            'Visibility_F1': f1,
+            'Visibility_Accuracy': accuracy,
+        })
+        return metrics
 
     def _update_pose_metrics(self, predictions):
         """Accumulate end-to-end keypoint and visibility metrics in pixels."""
@@ -215,6 +276,16 @@ class CocoEvaluator(object):
             unmatched_predictions = set(range(len(pred_boxes)))
             for annotation in gt_annotations:
                 gt_box = np.asarray(annotation['bbox'], dtype=np.float32).copy()
+                if min(gt_box[2], gt_box[3]) < self.pose_min_bbox_size:
+                    continue
+                self.num_eligible_gt += 1
+                gx, gy, gw, gh = gt_box
+                margin_x, margin_y = gw * self.pose_crop_margin, gh * self.pose_crop_margin
+                crop_width = (gx + gw + margin_x) - max(0, gx - margin_x)
+                crop_height = (gy + gh + margin_y) - max(0, gy - margin_y)
+                crop_scale = min(
+                    self.pose_crop_size / max(crop_width, 1e-12),
+                    self.pose_crop_size / max(crop_height, 1e-12))
                 gt_box[2:] += gt_box[:2]
                 candidates = [
                     index for index in unmatched_predictions
@@ -228,33 +299,36 @@ class CocoEvaluator(object):
                         pred_index = candidates[best_position]
 
                 gt_keypoints = np.asarray(annotation['keypoints'], dtype=np.float32).reshape(-1, 3)
-                labelled = gt_keypoints[:, 2] > 0
+                if len(gt_keypoints) != len(self.keypoint_names):
+                    raise ValueError(
+                        f'GT annotation {annotation.get("id")} has {len(gt_keypoints)} keypoints, '
+                        f'but evaluator metadata defines {len(self.keypoint_names)}')
                 visible = gt_keypoints[:, 2] > 1
+                labelled = visible
                 if pred_index is None:
-                    labelled_count = int(labelled.sum())
-                    for counts in self.pose_counts.values():
-                        counts['fn'] += labelled_count
-                    self.visibility_counts['fn'] += int(visible.sum())
                     continue
 
                 unmatched_predictions.remove(pred_index)
-                predicted_visible = pred_scores[pred_index] >= self.keypoint_visibility_thr
-                distances = np.linalg.norm(pred_keypoints[pred_index] - gt_keypoints[:, :2], axis=1)
+                self.num_matched += 1
+                if pred_keypoints.shape[1] < len(gt_keypoints):
+                    raise ValueError(
+                        f'predictions have {pred_keypoints.shape[1]} keypoints but GT expects '
+                        f'{len(gt_keypoints)} for annotation {annotation.get("id")}')
+                predicted_xy = pred_keypoints[pred_index][:len(gt_keypoints)]
+                predicted_visible = (
+                    pred_scores[pred_index][:len(gt_keypoints)] >= self.keypoint_visibility_thr)
+                distances = np.linalg.norm(
+                    predicted_xy - gt_keypoints[:, :2], axis=1) * crop_scale
                 for threshold, counts in self.pose_counts.items():
                     correct = labelled & predicted_visible & (distances <= threshold)
-                    counts['tp'] += int(correct.sum())
-                    counts['fp'] += int((labelled & predicted_visible & ~correct).sum())
-                    counts['fn'] += int((labelled & ~correct).sum())
+                    counts['tp'] += correct.astype(np.float64)
+                    counts['fp'] += (labelled & predicted_visible & ~correct).astype(np.float64)
+                    counts['fn'] += (labelled & ~correct).astype(np.float64)
 
-                self.visibility_counts['tp'] += int((visible & predicted_visible).sum())
-                self.visibility_counts['fp'] += int((~visible & predicted_visible).sum())
-                self.visibility_counts['fn'] += int((visible & ~predicted_visible).sum())
-
-            for pred_index in unmatched_predictions:
-                predicted_count = int((pred_scores[pred_index] >= self.keypoint_visibility_thr).sum())
-                for counts in self.pose_counts.values():
-                    counts['fp'] += predicted_count
-                self.visibility_counts['fp'] += predicted_count
+                self.visibility_counts['tp'] += (visible & predicted_visible).astype(np.float64)
+                self.visibility_counts['fp'] += (~visible & predicted_visible).astype(np.float64)
+                self.visibility_counts['fn'] += (visible & ~predicted_visible).astype(np.float64)
+                self.visibility_counts['tn'] += (~visible & ~predicted_visible).astype(np.float64)
 
     def accumulate(self):
         for coco_eval in self.coco_eval.values():
