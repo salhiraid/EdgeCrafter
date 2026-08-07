@@ -89,6 +89,33 @@ def extract_schema(module: type):
     return schame
 
 
+
+def _create_from_injected_config(cfg, global_cfg):
+    """Instantiate one inline injected config without sharing its overrides."""
+    if 'type' not in cfg:
+        raise ValueError('Missing inject for `type` style.')
+    type_name = str(cfg['type'])
+    if type_name not in global_cfg:
+        raise ValueError(f'Missing {type_name} in inspect stage.')
+
+    # ``create`` historically mutates registry schemas while resolving inline
+    # configs. Save and restore the schema so a list can safely contain several
+    # instances of the same dataset type with different paths.
+    schema = global_cfg[type_name]
+    saved = schema.copy()
+    try:
+        keys = [key for key in schema if not key.startswith('_')]
+        for key in keys:
+            del schema[key]
+        schema.update(schema['_kwargs'])
+        schema.update(cfg)
+        name = schema.pop('type')
+        return create(name, global_cfg)
+    finally:
+        schema.clear()
+        schema.update(saved)
+
+
 def create(type_or_name, global_cfg=GLOBAL_CONFIG, **kwargs):
     """
     """
@@ -147,22 +174,13 @@ def create(type_or_name, global_cfg=GLOBAL_CONFIG, **kwargs):
                 module_kwargs[k] = _cfg
 
         elif isinstance(_k, dict):
-            if 'type' not in _k.keys():
-                raise ValueError('Missing inject for `type` style.')
+            module_kwargs[k] = _create_from_injected_config(_k, global_cfg)
 
-            _type = str(_k['type'])
-            if _type not in global_cfg:
-                raise ValueError(f'Missing {_type} in inspect stage.')
-
-            _cfg: dict = global_cfg[_type]
-            # clean args
-            _keys = [k for k in _cfg.keys() if not k.startswith('_')]
-            for _arg in _keys:
-                del _cfg[_arg]
-            _cfg.update(_cfg['_kwargs']) # restore default values
-            _cfg.update(_k) # load config args
-            name = _cfg.pop('type') # pop extra key (`type` from _k)
-            module_kwargs[k] = create(name, global_cfg)
+        elif isinstance(_k, list):
+            module_kwargs[k] = [
+                _create_from_injected_config(item, global_cfg) if isinstance(item, dict) else item
+                for item in _k
+            ]
 
         else:
             raise ValueError(f'Inject does not support {_k}')

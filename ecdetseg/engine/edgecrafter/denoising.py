@@ -21,6 +21,14 @@ def get_contrastive_denoising_training_group(targets,
 
     num_gts = [len(t['labels']) for t in targets]
     device = targets[0]['labels'].device
+    for target_index, target in enumerate(targets):
+        labels = target['labels']
+        invalid = (labels < 0) | (labels >= num_classes)
+        if invalid.any():
+            invalid_labels = sorted(set(labels[invalid].detach().cpu().tolist()))
+            raise ValueError(
+                f'Denoising target labels must be in [0, {num_classes - 1}], '
+                f'but target {target_index} contains {invalid_labels}')
 
     max_gt_num = max(num_gts)
     if max_gt_num == 0:
