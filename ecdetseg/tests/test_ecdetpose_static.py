@@ -190,3 +190,36 @@ def test_default_pose_metric_names_are_registered():
         assert repr(name) in evaluator_source
     assert "Visibility_Accuracy" in evaluator_source
     assert "pose_per_keypoint_metrics" in evaluator_source
+
+
+def test_pose_configs_use_keypoint_aware_box_sanitizer():
+    config_paths = (
+        ROOT / "configs" / "ecdetpose" / "ecdetpose.yml",
+        ROOT / "configs" / "ecdetpose" / "examples" / "ecdetpose_s_vehicle_31kpts.yml",
+        ROOT / "configs" / "ecdetpose" / "examples" / "ecdetpose_s_vehicle_5datasets.yml",
+    )
+    for config_path in config_paths:
+        source = config_path.read_text(encoding="utf-8")
+        assert "type: KeypointSanitizeBoundingBoxes" in source
+        assert "type: SanitizeBoundingBoxes" not in source
+
+    matcher_source = (ROOT / "engine" / "edgecrafter" / "matcher.py").read_text(
+        encoding="utf-8")
+    assert "Target field alignment error" in matcher_source
+
+
+def test_pose_accuracy_recipe_configs():
+    yaml = pytest.importorskip("yaml")
+    examples = ROOT / "configs" / "ecdetpose" / "examples"
+    for size in ("s", "m"):
+        for recipe in ("balanced", "precision", "finetune"):
+            path = examples / f"ecdetpose_{size}_vehicle_pose_{recipe}.yml"
+            config = yaml.safe_load(path.read_text(encoding="utf-8"))
+            criterion = config["ECCriterion"]
+            assert criterion["weight_dict"]["loss_keypoint"] >= 10
+            assert criterion["matcher"]["weight_dict"]["keypoint_cost_weight"] > 0
+            assert criterion["matcher"]["weight_dict"]["oks_cost_weight"] == 0
+        precision = yaml.safe_load(
+            (examples / f"ecdetpose_{size}_vehicle_pose_precision.yml").read_text())
+        assert precision["eval_spatial_size"] == [960, 960]
+        assert precision["train_dataloader"]["collate_fn"]["mixup_prob"] == 0.0

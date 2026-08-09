@@ -302,3 +302,59 @@ python ecdetseg/train.py \
 The five weighted datasets are training sources only. COCO metrics are calculated against the one non-weighted COCO validation dataset inherited from `ecdetpose_s_vehicle_31kpts.yml`; set its `val_dataloader.dataset.img_folder` and `ann_file` to the validation set you want to report. This avoids mixing image IDs and incompatible COCO ground-truth objects. To report each of five validation datasets separately, run evaluation five times with a different validation path override/config for each run.
 
 For keypoint evaluation, every category in the validation JSON should define the same 31 keypoint names, and annotated arrays must use that order. Bbox-only validation annotations are automatically converted to ignored, zero-keypoint ground truths and therefore affect bbox metrics but not OKS metrics. Predictions are exported to pycocotools as the required `(x, y, v)` triplets, while the configured 31-value sigma vector replaces pycocotools' incompatible 17-person-keypoint default.
+### Target-size mismatch in the Hungarian matcher
+
+Pose pipelines must use `KeypointSanitizeBoundingBoxes`, not torchvision's
+generic `SanitizeBoundingBoxes`. The pose-aware sanitizer applies the same keep
+mask to boxes, labels, keypoints, `keypoint_valid`, areas, masks, and crowd
+flags. Using the generic sanitizer can leave more keypoint rows than boxes and
+produce a matcher error such as `tensor a (...) must match tensor b (...)`.
+
+## Pose-accuracy training recipes
+
+Six vehicle recipes are provided for the S and M models:
+
+| Goal | S config | M config |
+|---|---|---|
+| Balanced first training | `ecdetpose_s_vehicle_pose_balanced.yml` | `ecdetpose_m_vehicle_pose_balanced.yml` |
+| Maximum spatial precision | `ecdetpose_s_vehicle_pose_precision.yml` | `ecdetpose_m_vehicle_pose_precision.yml` |
+| Low-LR second-stage tuning | `ecdetpose_s_vehicle_pose_finetune.yml` | `ecdetpose_m_vehicle_pose_finetune.yml` |
+
+Start with **balanced**. It raises coordinate/OKS loss weights and enables an
+L1 keypoint cost in Hungarian matching without removing the detection losses.
+Use **precision** when small or distant keypoints need more pixels: it trains and
+evaluates at 960×960 and disables Mosaic/MixUp, but needs more GPU memory. Use
+**finetune** only as a second stage from a good full pose checkpoint; it uses a
+10× smaller head learning rate, a 10× smaller backbone learning rate, and no
+Mosaic/MixUp. Do not resume finetuning from a bbox-only checkpoint whose
+keypoint head was never trained.
+
+Example balanced training:
+
+```bash
+python ecdetseg/train.py \
+  -c ecdetseg/configs/ecdetpose/examples/ecdetpose_s_vehicle_pose_balanced.yml \
+  --use-amp
+```
+
+Example second-stage M-model fine-tuning:
+
+```bash
+python ecdetseg/train.py \
+  -c ecdetseg/configs/ecdetpose/examples/ecdetpose_m_vehicle_pose_finetune.yml \
+  -t outputs/ecdetpose_m_vehicle_pose_balanced/best.pth \
+  --use-amp
+```
+
+Replace the inherited train/validation path placeholders before training. For a
+`WeightedMultiDataset`, copy the recipe's `ECCriterion`, matcher, resolution,
+and augmentation overrides into the five-dataset config rather than replacing
+its outer dataset node.
+
+When comparing recipes, monitor all three separate groups:
+`Performance/BBox`, `Performance/Keypoints_COCO_OKS`, and
+`Performance/Keypoints_Pixel`. If bbox AP falls while pose improves, reduce
+`loss_keypoint` or `keypoint_cost_weight`; if coordinates improve but visibility
+is poor, raise `loss_keypoint_visibility` gradually. Also audit annotation order,
+visibility values, bbox-only rates per source dataset, and per-joint metrics—the
+optimizer cannot correct inconsistent keypoint semantics across datasets.

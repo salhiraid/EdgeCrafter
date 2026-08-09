@@ -90,6 +90,23 @@ class HungarianMatcher(nn.Module):
         """
         bs, num_queries = outputs["pred_logits"].shape[:2]
 
+        # Every per-instance field must remain aligned with boxes. In pose
+        # pipelines torchvision's generic SanitizeBoundingBoxes can remove an
+        # invalid box without filtering custom keypoint tensors, which used to
+        # fail later with an opaque cost-matrix broadcasting error.
+        for batch_index, target in enumerate(targets):
+            num_targets = len(target["boxes"])
+            for field in ("labels", "keypoints", "keypoint_valid", "has_keypoints"):
+                if field in target and len(target[field]) != num_targets:
+                    image_id = target.get("image_id", "<unknown>")
+                    if torch.is_tensor(image_id):
+                        image_id = image_id.flatten().tolist()
+                    raise ValueError(
+                        f"Target field alignment error at batch_index={batch_index}, "
+                        f"image_id={image_id}: boxes has {num_targets} instances but "
+                        f"{field} has {len(target[field])}. Pose pipelines must use "
+                        "KeypointSanitizeBoundingBoxes instead of SanitizeBoundingBoxes.")
+
         # We flatten to compute the cost matrices in a batch
         if self.use_focal_loss:
             out_prob = F.sigmoid(outputs["pred_logits"].flatten(0, 1))
