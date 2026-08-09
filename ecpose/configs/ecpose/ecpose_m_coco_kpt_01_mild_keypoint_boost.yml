@@ -1,0 +1,15 @@
+__include__: [
+  'ecpose_m_coco.yml'
+]
+
+output_dir: outputs/ecpose_m_kpt_01_mild_keypoint_boost
+
+DETRPoseCriterion:
+  weight_dict: {loss_vfl: 2.0, loss_keypoints: 15.0, loss_oks: 6.0}
+  losses: ['vfl', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 1.5
+    cost_keypoints: 12.0
+    cost_oks: 5.0
+

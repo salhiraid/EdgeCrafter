@@ -1,0 +1,47 @@
+__include__: [
+  'ecpose_s_coco.yml'
+]
+
+output_dir: outputs/ecpose_s_kpt_04_clean_finetune_no_heavy_aug
+
+epoches: 20
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*.backbone)(?!.*(?:norm|bn|bias)).*$'
+      lr: 0.000005
+    -
+      params: '^(?=.*.backbone)(?=.*(?:norm|bn|bias)).*$'
+      lr: 0.000005
+      weight_decay: 0.
+    -
+      params: '^(?!.*\.backbone)(?=.*(?:norm|bn|bias)).*$'
+      weight_decay: 0.
+  lr: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+DETRPoseCriterion:
+  weight_dict: {loss_vfl: 1.5, loss_keypoints: 16.0, loss_oks: 8.0}
+  losses: ['vfl', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 1.0
+    cost_keypoints: 12.0
+    cost_oks: 8.0
+
+train_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {type: RandomHorizontalFlip}
+        - {type: ColorJitter}
+        - {type: Resize, size: [640, 640]}
+        - {type: ToTensor}
+        - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+      mosaic_prob: 0.0
+  collate_fn:
+    stop_epoch: 0
+

@@ -1,0 +1,21 @@
+__include__: [
+  'ecpose_s_coco.yml'
+]
+
+output_dir: outputs/ecpose_s_kpt_05_more_queries_crowded
+
+DETRTransformer:
+  num_queries: 90
+
+DETRPosePostProcessor:
+  num_select: 90
+
+DETRPoseCriterion:
+  weight_dict: {loss_vfl: 2.0, loss_keypoints: 14.0, loss_oks: 6.0}
+  losses: ['vfl', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 1.5
+    cost_keypoints: 12.0
+    cost_oks: 6.0
+

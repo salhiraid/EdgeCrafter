@@ -1,0 +1,15 @@
+__include__: [
+  'ecpose_s_coco.yml'
+]
+
+output_dir: outputs/ecpose_s_kpt_02_oks_focus
+
+DETRPoseCriterion:
+  weight_dict: {loss_vfl: 2.0, loss_keypoints: 10.0, loss_oks: 8.0}
+  losses: ['vfl', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 1.5
+    cost_keypoints: 8.0
+    cost_oks: 8.0
+

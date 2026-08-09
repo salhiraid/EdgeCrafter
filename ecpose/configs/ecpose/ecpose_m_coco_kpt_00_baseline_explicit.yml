@@ -1,0 +1,15 @@
+__include__: [
+  'ecpose_m_coco.yml'
+]
+
+output_dir: outputs/ecpose_m_kpt_00_baseline_explicit
+
+DETRPoseCriterion:
+  weight_dict: {loss_vfl: 2.0, loss_keypoints: 10.0, loss_oks: 4.0}
+  losses: ['vfl', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 2.0
+    cost_keypoints: 10.0
+    cost_oks: 4.0
+

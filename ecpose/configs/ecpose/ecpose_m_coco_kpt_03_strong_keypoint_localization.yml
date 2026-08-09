@@ -1,0 +1,17 @@
+__include__: [
+  'ecpose_m_coco.yml'
+]
+
+output_dir: outputs/ecpose_m_kpt_03_strong_keypoint_localization
+
+DETRPoseCriterion:
+  weight_dict: {loss_vfl: 1.5, loss_keypoints: 20.0, loss_oks: 6.0}
+  losses: ['vfl', 'keypoints']
+  matcher:
+    type: DETRPoseHungarianMatcher
+    cost_class: 1.0
+    cost_keypoints: 18.0
+    cost_oks: 6.0
+
+clip_max_norm: 0.1
+
