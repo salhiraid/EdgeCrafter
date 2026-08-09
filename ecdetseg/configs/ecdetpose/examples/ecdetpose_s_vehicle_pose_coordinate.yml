@@ -1,0 +1,18 @@
+__include__: ['ecdetpose_s_vehicle_31kpts.yml']
+
+output_dir: outputs/ecdetpose_s_vehicle_pose_coordinate
+
+# Coordinate-heavy ablation: prioritize normalized Smooth-L1 precision and
+# coordinate-aware assignment. Watch bbox AP for excessive pose competition.
+ECCriterion:
+  weight_dict:
+    loss_keypoint: 20
+    loss_oks: 2
+    loss_keypoint_visibility: 1
+  matcher:
+    weight_dict:
+      cost_class: 2
+      cost_bbox: 5
+      cost_giou: 2
+      keypoint_cost_weight: 6
+      oks_cost_weight: 0
