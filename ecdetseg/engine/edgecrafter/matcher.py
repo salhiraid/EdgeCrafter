@@ -90,6 +90,23 @@ class HungarianMatcher(nn.Module):
         """
         bs, num_queries = outputs["pred_logits"].shape[:2]
 
+        # Every per-instance field must remain aligned with boxes. In pose
+        # pipelines torchvision's generic SanitizeBoundingBoxes can remove an
+        # invalid box without filtering custom keypoint tensors, which used to
+        # fail later with an opaque cost-matrix broadcasting error.
+        for batch_index, target in enumerate(targets):
+            num_targets = len(target["boxes"])
+            for field in ("labels", "keypoints", "keypoint_valid", "has_keypoints"):
+                if field in target and len(target[field]) != num_targets:
+                    image_id = target.get("image_id", "<unknown>")
+                    if torch.is_tensor(image_id):
+                        image_id = image_id.flatten().tolist()
+                    raise ValueError(
+                        f"Target field alignment error at batch_index={batch_index}, "
+                        f"image_id={image_id}: boxes has {num_targets} instances but "
+                        f"{field} has {len(target[field])}. Pose pipelines must use "
+                        "KeypointSanitizeBoundingBoxes instead of SanitizeBoundingBoxes.")
+
         # We flatten to compute the cost matrices in a batch
         if self.use_focal_loss:
             out_prob = F.sigmoid(outputs["pred_logits"].flatten(0, 1))
@@ -131,7 +148,12 @@ class HungarianMatcher(nn.Module):
             out_keypoints = outputs['pred_keypoints'].flatten(0, 1)
             tgt_keypoints = torch.cat([v['keypoints'] for v in targets]).to(out_keypoints.device)
             if tgt_keypoints.numel() > 0:
-                valid = tgt_keypoints[..., 2] > 0
+                instance_valid = torch.cat([
+                    v.get('keypoint_valid', v.get('has_keypoints', torch.ones(
+                        len(v['boxes']), dtype=torch.bool, device=v['boxes'].device)))
+                    for v in targets
+                ]).to(device=out_keypoints.device, dtype=torch.bool)
+                valid = (tgt_keypoints[..., 2] > 0) & instance_valid[:, None]
                 distance = (out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]).abs().sum(-1)
                 valid_f = valid[None].to(distance.dtype)
                 cost_keypoint = (distance * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
