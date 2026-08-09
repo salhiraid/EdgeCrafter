@@ -36,7 +36,8 @@ class HungarianMatcher(nn.Module):
     ]
 
     def __init__(self, weight_dict, use_focal_loss=False, alpha=0.25, gamma=2.0,
-                 mask_point_sample_ratio=None, **kwargs):
+                 mask_point_sample_ratio=None, keypoint_oks_sigmas=None,
+                 **kwargs):
         """Creates the matcher
 
         Params:
@@ -51,6 +52,7 @@ class HungarianMatcher(nn.Module):
         self.cost_giou = weight_dict["cost_giou"]
         self.cost_keypoint = weight_dict.get("keypoint_cost_weight", weight_dict.get("cost_keypoint", 0.0))
         self.cost_oks = weight_dict.get("oks_cost_weight", weight_dict.get("cost_oks", 0.0))
+        self.keypoint_oks_sigmas = keypoint_oks_sigmas
 
         self.use_focal_loss = use_focal_loss
         self.alpha = alpha
@@ -158,11 +160,29 @@ class HungarianMatcher(nn.Module):
                 valid_f = valid[None].to(distance.dtype)
                 cost_keypoint = (distance * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
 
-                areas = torch.cat([v.get('area', v['boxes'][:, 2] * v['boxes'][:, 3]) for v in targets]).to(out_keypoints.device)
+                # Keypoints and boxes have both been normalized by the pose
+                # pipeline, so use normalized bbox area here. COCO's raw pixel
+                # area would make the OKS matching cost almost constant.
+                areas = (tgt_bbox[:, 2] * tgt_bbox[:, 3]).to(out_keypoints.device).clamp(min=1e-6)
                 squared_distance = ((out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]) ** 2).sum(-1)
-                oks = torch.exp(-squared_distance / (areas[None, :, None].clamp(min=1e-6) * 0.02))
+                if self.keypoint_oks_sigmas is None:
+                    sigmas = out_keypoints.new_full((tgt_keypoints.shape[1],), 0.1)
+                else:
+                    if len(self.keypoint_oks_sigmas) != tgt_keypoints.shape[1]:
+                        raise ValueError(
+                            'HungarianMatcher keypoint_oks_sigmas must contain '
+                            f'{tgt_keypoints.shape[1]} values, got '
+                            f'{len(self.keypoint_oks_sigmas)}')
+                    sigmas = out_keypoints.new_tensor(self.keypoint_oks_sigmas)
+                variances = (sigmas * 2) ** 2
+                denom = areas[None, :, None] * variances[None, None, :] * 2.0
+                oks = torch.exp(-squared_distance / denom.clamp(min=1e-12))
                 oks = (oks * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
                 cost_oks = 1.0 - oks
+                # Bbox-only instances have no meaningful pose matching cost.
+                pose_valid = valid.any(dim=1)
+                cost_keypoint[:, ~pose_valid] = 0.0
+                cost_oks[:, ~pose_valid] = 0.0
         
         masks_present = "masks" in targets[0] and 'pred_masks' in outputs
         if masks_present:

@@ -223,3 +223,34 @@ def test_pose_accuracy_recipe_configs():
             (examples / f"ecdetpose_{size}_vehicle_pose_precision.yml").read_text())
         assert precision["eval_spatial_size"] == [960, 960]
         assert precision["train_dataloader"]["collate_fn"]["mixup_prob"] == 0.0
+
+
+def test_pose_loss_and_matcher_ablation_configs():
+    yaml = pytest.importorskip("yaml")
+    examples = ROOT / "configs" / "ecdetpose" / "examples"
+    expected = {
+        "coordinate": (20, 2, 1, 6, 0),
+        "oks": (8, 10, 1, 1, 4),
+        "visibility": (10, 4, 3, 2, 0),
+    }
+    for size in ("s", "m"):
+        for recipe, values in expected.items():
+            path = examples / f"ecdetpose_{size}_vehicle_pose_{recipe}.yml"
+            config = yaml.safe_load(path.read_text(encoding="utf-8"))
+            weights = config["ECCriterion"]["weight_dict"]
+            matcher = config["ECCriterion"]["matcher"]
+            costs = matcher["weight_dict"]
+            assert (weights["loss_keypoint"], weights["loss_oks"],
+                    weights["loss_keypoint_visibility"],
+                    costs["keypoint_cost_weight"],
+                    costs["oks_cost_weight"]) == values
+            if recipe == "oks":
+                assert len(matcher["keypoint_oks_sigmas"]) == 31
+
+
+def test_matcher_oks_uses_normalized_box_area_and_configured_sigmas():
+    source = (ROOT / "engine" / "edgecrafter" / "matcher.py").read_text(
+        encoding="utf-8")
+    assert "areas = (tgt_bbox[:, 2] * tgt_bbox[:, 3])" in source
+    assert "self.keypoint_oks_sigmas" in source
+    assert "cost_oks[:, ~pose_valid] = 0.0" in source

@@ -358,3 +358,21 @@ When comparing recipes, monitor all three separate groups:
 is poor, raise `loss_keypoint_visibility` gradually. Also audit annotation order,
 visibility values, bbox-only rates per source dataset, and per-joint metrics—the
 optimizer cannot correct inconsistent keypoint semantics across datasets.
+
+### Loss and matcher ablation recipes
+
+Three additional S/M pairs isolate different pose bottlenecks:
+
+| Recipe suffix | Loss weights `(coordinate, OKS, visibility)` | Matcher `(keypoint, OKS)` | Use when |
+|---|---:|---:|---|
+| `pose_coordinate` | `(20, 2, 1)` | `(6, 0)` | Coordinates are consistently displaced but visibility is acceptable |
+| `pose_oks` | `(8, 10, 1)` | `(1, 4)` | Scale-normalized COCO OKS is the primary target |
+| `pose_visibility` | `(10, 4, 3)` | `(2, 0)` | Visibility recall/F1 is the main failure |
+
+Each suffix is available as both `ecdetpose_s_vehicle_<suffix>.yml` and
+`ecdetpose_m_vehicle_<suffix>.yml`. Change one axis at a time and compare it to
+the balanced recipe using the same seed, data mixture, batch size, and
+checkpoint initialization. The OKS matcher uses the same 31 sigmas as the
+criterion and normalized bbox area; bbox-only targets receive zero pose cost.
+Avoid choosing the largest weight merely because it is available: overly strong
+pose matching can reduce bbox AP or destabilize early assignments.
