@@ -254,3 +254,18 @@ def test_matcher_oks_uses_normalized_box_area_and_configured_sigmas():
     assert "areas = (tgt_bbox[:, 2] * tgt_bbox[:, 3])" in source
     assert "self.keypoint_oks_sigmas" in source
     assert "cost_oks[:, ~pose_valid] = 0.0" in source
+
+
+def test_legacy_sanitizer_and_mixup_keep_pose_fields_aligned():
+    transforms_source = (
+        ROOT / "engine" / "data" / "transforms" / "_transforms.py"
+    ).read_text(encoding="utf-8")
+    dataloader_source = (
+        ROOT / "engine" / "data" / "dataloader.py"
+    ).read_text(encoding="utf-8")
+    assert "@register(name='SanitizeBoundingBoxes')" in transforms_source
+    assert "@register(name='KeypointSanitizeBoundingBoxes')" in transforms_source
+    assert "SanitizeBoundingBoxes = KeypointSanitizeBoundingBoxes" in transforms_source
+    assert "'keypoints', 'keypoint_valid', 'has_keypoints'" in dataloader_source
+    assert dataloader_source.count("updated_targets[i]['keypoints']") == 0
+    assert "MixUp target schema mismatch" in dataloader_source

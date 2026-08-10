@@ -376,3 +376,17 @@ checkpoint initialization. The OKS matcher uses the same 31 sigmas as the
 criterion and normalized bbox area; bbox-only targets receive zero pose cost.
 Avoid choosing the largest weight merely because it is available: overly strong
 pose matching can reduce bbox AP or destabilize early assignments.
+
+### Alignment error after enabling keypoint matcher costs
+
+An error such as `boxes has 3 instances but keypoints has 5` is a data-pipeline
+alignment failure, not a consequence of the numerical loss weights. It can be
+revealed when `keypoint_cost_weight` or `oks_cost_weight` changes from zero,
+because the matcher then reads the previously unused keypoint matrix.
+
+Both sanitizer names now resolve to the pose-aware sanitizer, which applies one
+keep mask to every instance field. MixUp likewise concatenates boxes, labels,
+areas, crowd flags, masks, keypoints, and validity flags exactly once and rejects
+incompatible schemas. Update both `_transforms.py` and `dataloader.py` on older
+training checkouts. Retain `KeypointSanitizeBoundingBoxes` explicitly in new pose
+configs because it documents the required behavior.

@@ -106,8 +106,9 @@ class HungarianMatcher(nn.Module):
                     raise ValueError(
                         f"Target field alignment error at batch_index={batch_index}, "
                         f"image_id={image_id}: boxes has {num_targets} instances but "
-                        f"{field} has {len(target[field])}. Pose pipelines must use "
-                        "KeypointSanitizeBoundingBoxes instead of SanitizeBoundingBoxes.")
+                        f"{field} has {len(target[field])}. Every transform and "
+                        "collate augmentation must apply the same keep/concat operation "
+                        "to all instance fields; use the pose-aware sanitizer and MixUp.")
 
         # We flatten to compute the cost matrices in a batch
         if self.use_focal_loss:
