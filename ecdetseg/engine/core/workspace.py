@@ -24,20 +24,20 @@ def register(dct :Any=GLOBAL_CONFIG, name=None, force=False):
         register_name = foo.__name__ if name is None else name
         if not force:
             if inspect.isclass(dct):
-                assert not hasattr(dct, foo.__name__), \
-                    f'module {dct.__name__} has {foo.__name__}'
+                assert not hasattr(dct, register_name), \
+                    f'module {dct.__name__} has {register_name}'
             else:
-                assert foo.__name__ not in dct, \
-                f'{foo.__name__} has been already registered'
+                assert register_name not in dct, \
+                    f'{register_name} has been already registered'
 
         if inspect.isfunction(foo):
             @functools.wraps(foo)
             def wrap_func(*args, **kwargs):
                 return foo(*args, **kwargs)
             if isinstance(dct, dict):
-                dct[foo.__name__] = wrap_func
+                dct[register_name] = wrap_func
             elif inspect.isclass(dct):
-                setattr(dct, foo.__name__, wrap_func)
+                setattr(dct, register_name, wrap_func)
             else:
                 raise AttributeError('')
             return wrap_func

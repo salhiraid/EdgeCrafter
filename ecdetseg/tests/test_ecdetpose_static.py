@@ -269,3 +269,11 @@ def test_legacy_sanitizer_and_mixup_keep_pose_fields_aligned():
     assert "'keypoints', 'keypoint_valid', 'has_keypoints'" in dataloader_source
     assert dataloader_source.count("updated_targets[i]['keypoints']") == 0
     assert "MixUp target schema mismatch" in dataloader_source
+
+
+def test_named_registration_checks_the_registered_alias():
+    workspace_source = (ROOT / "engine" / "core" / "workspace.py").read_text(
+        encoding="utf-8")
+    assert "assert register_name not in dct" in workspace_source
+    assert "dct[register_name] = extract_schema(foo)" in workspace_source
+    assert "assert foo.__name__ not in dct" not in workspace_source
