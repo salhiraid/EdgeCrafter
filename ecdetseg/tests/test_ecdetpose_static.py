@@ -277,3 +277,19 @@ def test_named_registration_checks_the_registered_alias():
     assert "assert register_name not in dct" in workspace_source
     assert "dct[register_name] = extract_schema(foo)" in workspace_source
     assert "assert foo.__name__ not in dct" not in workspace_source
+
+
+def test_pose_sanitizer_preserves_bounding_box_metadata():
+    source = (ROOT / "engine" / "data" / "transforms" / "_transforms.py").read_text(
+        encoding="utf-8")
+    assert "box_format = getattr(boxes, _boxes_keys[0]" in source
+    assert "spatial_size = getattr(boxes, _boxes_keys[1]" in source
+    assert "target['boxes'] = convert_to_tv_tensor(" in source
+
+
+def test_training_validates_normalized_target_boxes():
+    source = (ROOT / "engine" / "solver" / "ec_engine.py").read_text(
+        encoding="utf-8")
+    assert "_validate_target_boxes(targets)" in source
+    assert "Target boxes must be normalized CXCYWH values in [0, 1]" in source
+    assert "ConvertBoxes(fmt=\"cxcywh\", normalize=True)" in source

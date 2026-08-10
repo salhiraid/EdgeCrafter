@@ -316,12 +316,29 @@ class KeypointSanitizeBoundingBoxes(nn.Module):
         if "boxes" not in target:
             return image, target
         boxes = target["boxes"]
+        box_format = getattr(boxes, _boxes_keys[0], 'XYXY')
+        box_format = getattr(box_format, 'value', box_format)
+        spatial_size = getattr(boxes, _boxes_keys[1], _image_size_hw(image))
         keep = (
             torch.isfinite(boxes).all(dim=-1)
             & (boxes[:, 2] - boxes[:, 0] >= self.min_size)
             & (boxes[:, 3] - boxes[:, 1] >= self.min_size)
         )
-        return image, _filter_target(target, keep)
+        target = _filter_target(target, keep)
+        # Boolean indexing is not guaranteed to retain the torchvision
+        # BoundingBoxes subclass/metadata on every supported torchvision
+        # version. ConvertBoxes only transforms BoundingBoxes, so losing this
+        # type would send absolute XYXY pixel coordinates into the criterion.
+        target['boxes'] = convert_to_tv_tensor(
+            target['boxes'], key='boxes', box_format=str(box_format),
+            spatial_size=spatial_size)
+        if 'masks' in target and not isinstance(target['masks'], Mask):
+            target['masks'] = convert_to_tv_tensor(target['masks'], key='masks')
+        return image, target
+
+
+# Public compatibility alias imported by transforms.__init__.
+SanitizeBoundingBoxes = KeypointSanitizeBoundingBoxes
 
 
 # Public compatibility alias imported by transforms.__init__.

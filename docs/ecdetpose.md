@@ -390,3 +390,18 @@ areas, crowd flags, masks, keypoints, and validity flags exactly once and reject
 incompatible schemas. Update both `_transforms.py` and `dataloader.py` on older
 training checkouts. Retain `KeypointSanitizeBoundingBoxes` explicitly in new pose
 configs because it documents the required behavior.
+
+### Abnormally large bbox loss after pose sanitization
+
+The criterion expects normalized `CXCYWH` boxes, so a weighted `loss_bbox` in
+the thousands means absolute pixel `XYXY` boxes reached the loss. On some
+Torchvision versions, boolean indexing in the pose-aware sanitizer drops the
+`BoundingBoxes` subclass and its format/canvas metadata. `ConvertBoxes` then
+skips that plain tensor because it only transforms `BoundingBoxes` values.
+
+The sanitizer now explicitly reconstructs the `BoundingBoxes` value after
+filtering. Training also validates the normalized `[0, 1]` target-box contract
+before the model runs and reports dataset/image context. With `loss_bbox: 5`, a
+properly normalized per-layer bbox loss should be on the order of units, not
+thousands. The total displayed loss sums the main, auxiliary, encoder, and
+denoising losses, so one malformed bbox loss is repeated many times.

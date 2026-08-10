@@ -45,6 +45,7 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         _validate_target_labels(targets, criterion.num_classes)
+        _validate_target_boxes(targets)
         global_step = epoch * len(data_loader) + i
         metas = dict(epoch=epoch, step=i, global_step=global_step, epoch_step=len(data_loader))
 
@@ -142,6 +143,36 @@ def _validate_target_labels(targets, num_classes):
                 f'Target labels must be in [0, {num_classes - 1}], but found {invalid_labels} '
                 f'at batch_index={batch_index}, dataset_index={dataset_index}, image_id={image_id}. '
                 'Use a shared contiguous category-name mapping for every component dataset.')
+
+
+def _validate_target_boxes(targets):
+    """Validate the normalized CXCYWH contract expected by box losses."""
+    for batch_index, target in enumerate(targets):
+        boxes = target.get('boxes')
+        if boxes is None or boxes.numel() == 0:
+            continue
+        dataset_index = target.get('dataset_index')
+        dataset_index = int(dataset_index.item()) if dataset_index is not None else 'unknown'
+        image_id = target.get('image_id')
+        image_id = int(image_id.item()) if image_id is not None else 'unknown'
+        context = (
+            f'batch_index={batch_index}, dataset_index={dataset_index}, '
+            f'image_id={image_id}')
+        if boxes.ndim != 2 or boxes.shape[-1] != 4:
+            raise ValueError(
+                f'Target boxes must have shape [N, 4], got {tuple(boxes.shape)} at {context}')
+        if not torch.isfinite(boxes).all():
+            raise ValueError(f'Target boxes contain NaN or Inf at {context}')
+        box_min = float(boxes.min().detach().cpu())
+        box_max = float(boxes.max().detach().cpu())
+        if box_min < -1e-4 or box_max > 1.0001:
+            raise ValueError(
+                'Target boxes must be normalized CXCYWH values in [0, 1], '
+                f'but their range is [{box_min:.4f}, {box_max:.4f}] at {context}. '
+                'Ensure ConvertBoxes(fmt="cxcywh", normalize=True) receives a '
+                'torchvision BoundingBoxes object after sanitization.')
+        if (boxes[:, 2:] <= 0).any():
+            raise ValueError(f'Target boxes contain non-positive width/height at {context}')
 
 
 @torch.no_grad()
