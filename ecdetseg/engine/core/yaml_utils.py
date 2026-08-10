@@ -22,9 +22,11 @@ __all__ = [
 INCLUDE_KEY = '__include__'
 
 
-def load_config(file_path, cfg=dict()):
+def load_config(file_path, cfg=None):
     """load config
     """
+    if cfg is None:
+        cfg = {}
     _, ext = os.path.splitext(file_path)
     assert ext in ['.yml', '.yaml'], "only support yaml files"
 
@@ -55,7 +57,17 @@ def merge_dict(dct, another_dct, inplace=True) -> Dict:
     def _merge(dct, another) -> Dict:
         for k in another:
             if (k in dct and isinstance(dct[k], dict) and isinstance(another[k], dict)):
-                _merge(dct[k], another[k])
+                # A config node that changes its registered component type is
+                # a replacement, not an extension of the old component.  A
+                # recursive merge here leaked CocoDetection-only arguments
+                # (img_folder, ann_file, num_keypoints) into
+                # WeightedMultiDataset.__init__.
+                old_type = dct[k].get('type')
+                new_type = another[k].get('type')
+                if old_type is not None and new_type is not None and old_type != new_type:
+                    dct[k] = copy.deepcopy(another[k])
+                else:
+                    _merge(dct[k], another[k])
             else:
                 dct[k] = another[k]
 

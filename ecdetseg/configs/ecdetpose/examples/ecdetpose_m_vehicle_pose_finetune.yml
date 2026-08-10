@@ -1,0 +1,34 @@
+# Second-stage fine-tuning recipe for a checkpoint that already detects well.
+# Warm-start the balanced/precision checkpoint with -t so the smaller learning rate is used.
+__include__: ['ecdetpose_m_vehicle_31kpts.yml']
+
+output_dir: outputs/ecdetpose_m_vehicle_pose_finetune
+
+epochs: 30
+warmup_iter: 500
+optimizer:
+  lr: 0.00005
+  params:
+    - {params: '^(?=.*.backbone)(?!.*(?:norm|bn|bias)).*$', lr: 0.0000025}
+    - {params: '^(?=.*.backbone)(?=.*(?:norm|bn|bias)).*$', lr: 0.0000025, weight_decay: 0.0}
+    - {params: '^(?!.*\.backbone)(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.0}
+
+train_dataloader:
+  dataset:
+    transforms:
+      mosaic_prob: 0.0
+  collate_fn:
+    mixup_prob: 0.0
+
+ECCriterion:
+  weight_dict:
+    loss_keypoint: 15
+    loss_oks: 5
+    loss_keypoint_visibility: 1
+  matcher:
+    weight_dict:
+      cost_class: 2
+      cost_bbox: 5
+      cost_giou: 2
+      keypoint_cost_weight: 3
+      oks_cost_weight: 0
