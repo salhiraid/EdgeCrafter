@@ -36,7 +36,8 @@ class HungarianMatcher(nn.Module):
     ]
 
     def __init__(self, weight_dict, use_focal_loss=False, alpha=0.25, gamma=2.0,
-                 mask_point_sample_ratio=None, **kwargs):
+                 mask_point_sample_ratio=None, keypoint_oks_sigmas=None,
+                 **kwargs):
         """Creates the matcher
 
         Params:
@@ -51,6 +52,7 @@ class HungarianMatcher(nn.Module):
         self.cost_giou = weight_dict["cost_giou"]
         self.cost_keypoint = weight_dict.get("keypoint_cost_weight", weight_dict.get("cost_keypoint", 0.0))
         self.cost_oks = weight_dict.get("oks_cost_weight", weight_dict.get("cost_oks", 0.0))
+        self.keypoint_oks_sigmas = keypoint_oks_sigmas
 
         self.use_focal_loss = use_focal_loss
         self.alpha = alpha
@@ -89,6 +91,24 @@ class HungarianMatcher(nn.Module):
                 len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
         """
         bs, num_queries = outputs["pred_logits"].shape[:2]
+
+        # Every per-instance field must remain aligned with boxes. In pose
+        # pipelines torchvision's generic SanitizeBoundingBoxes can remove an
+        # invalid box without filtering custom keypoint tensors, which used to
+        # fail later with an opaque cost-matrix broadcasting error.
+        for batch_index, target in enumerate(targets):
+            num_targets = len(target["boxes"])
+            for field in ("labels", "keypoints", "keypoint_valid", "has_keypoints"):
+                if field in target and len(target[field]) != num_targets:
+                    image_id = target.get("image_id", "<unknown>")
+                    if torch.is_tensor(image_id):
+                        image_id = image_id.flatten().tolist()
+                    raise ValueError(
+                        f"Target field alignment error at batch_index={batch_index}, "
+                        f"image_id={image_id}: boxes has {num_targets} instances but "
+                        f"{field} has {len(target[field])}. Every transform and "
+                        "collate augmentation must apply the same keep/concat operation "
+                        "to all instance fields; use the pose-aware sanitizer and MixUp.")
 
         # We flatten to compute the cost matrices in a batch
         if self.use_focal_loss:
@@ -131,16 +151,39 @@ class HungarianMatcher(nn.Module):
             out_keypoints = outputs['pred_keypoints'].flatten(0, 1)
             tgt_keypoints = torch.cat([v['keypoints'] for v in targets]).to(out_keypoints.device)
             if tgt_keypoints.numel() > 0:
-                valid = tgt_keypoints[..., 2] > 0
+                instance_valid = torch.cat([
+                    v.get('keypoint_valid', v.get('has_keypoints', torch.ones(
+                        len(v['boxes']), dtype=torch.bool, device=v['boxes'].device)))
+                    for v in targets
+                ]).to(device=out_keypoints.device, dtype=torch.bool)
+                valid = (tgt_keypoints[..., 2] > 0) & instance_valid[:, None]
                 distance = (out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]).abs().sum(-1)
                 valid_f = valid[None].to(distance.dtype)
                 cost_keypoint = (distance * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
 
-                areas = torch.cat([v.get('area', v['boxes'][:, 2] * v['boxes'][:, 3]) for v in targets]).to(out_keypoints.device)
+                # Keypoints and boxes have both been normalized by the pose
+                # pipeline, so use normalized bbox area here. COCO's raw pixel
+                # area would make the OKS matching cost almost constant.
+                areas = (tgt_bbox[:, 2] * tgt_bbox[:, 3]).to(out_keypoints.device).clamp(min=1e-6)
                 squared_distance = ((out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]) ** 2).sum(-1)
-                oks = torch.exp(-squared_distance / (areas[None, :, None].clamp(min=1e-6) * 0.02))
+                if self.keypoint_oks_sigmas is None:
+                    sigmas = out_keypoints.new_full((tgt_keypoints.shape[1],), 0.1)
+                else:
+                    if len(self.keypoint_oks_sigmas) != tgt_keypoints.shape[1]:
+                        raise ValueError(
+                            'HungarianMatcher keypoint_oks_sigmas must contain '
+                            f'{tgt_keypoints.shape[1]} values, got '
+                            f'{len(self.keypoint_oks_sigmas)}')
+                    sigmas = out_keypoints.new_tensor(self.keypoint_oks_sigmas)
+                variances = (sigmas * 2) ** 2
+                denom = areas[None, :, None] * variances[None, None, :] * 2.0
+                oks = torch.exp(-squared_distance / denom.clamp(min=1e-12))
                 oks = (oks * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
                 cost_oks = 1.0 - oks
+                # Bbox-only instances have no meaningful pose matching cost.
+                pose_valid = valid.any(dim=1)
+                cost_keypoint[:, ~pose_valid] = 0.0
+                cost_oks[:, ~pose_valid] = 0.0
         
         masks_present = "masks" in targets[0] and 'pred_masks' in outputs
         if masks_present:
