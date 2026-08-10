@@ -122,22 +122,23 @@ class BatchImageCollateFunction(BaseCollateFunction):
             updated_targets = deepcopy(targets)
 
             for i in range(len(targets)):
-                # Combine boxes, labels, and areas from original and shifted targets
-                updated_targets[i]['boxes'] = torch.cat([targets[i]['boxes'], shifted_targets[i]['boxes']], dim=0)
-                updated_targets[i]['labels'] = torch.cat([targets[i]['labels'], shifted_targets[i]['labels']], dim=0)
-                updated_targets[i]['area'] = torch.cat([targets[i]['area'], shifted_targets[i]['area']], dim=0)
-                if 'masks' in targets[i]:
-                    updated_targets[i]['masks'] = torch.cat([targets[i]['masks'], shifted_targets[i]['masks']], dim=0)
-                if 'keypoints' in targets[i]:
-                    updated_targets[i]['keypoints'] = torch.cat([targets[i]['keypoints'], shifted_targets[i]['keypoints']], dim=0)
-                if 'keypoint_valid' in targets[i]:
-                    updated_targets[i]['keypoint_valid'] = torch.cat([targets[i]['keypoint_valid'], shifted_targets[i]['keypoint_valid']], dim=0)
-                if 'has_keypoints' in targets[i]:
-                    updated_targets[i]['has_keypoints'] = torch.cat([targets[i]['has_keypoints'], shifted_targets[i]['has_keypoints']], dim=0)
-                if 'keypoints' in targets[i]:
-                    updated_targets[i]['keypoints'] = torch.cat([targets[i]['keypoints'], shifted_targets[i]['keypoints']], dim=0)
-                if 'keypoint_valid' in targets[i]:
-                    updated_targets[i]['keypoint_valid'] = torch.cat([targets[i]['keypoint_valid'], shifted_targets[i]['keypoint_valid']], dim=0)
+                # Apply exactly the same concatenation to every per-instance
+                # field. Keypoint fields used to be assigned twice here, and
+                # optional fields could silently remain at the pre-MixUp size.
+                instance_fields = (
+                    'boxes', 'labels', 'area', 'iscrowd', 'masks',
+                    'keypoints', 'keypoint_valid', 'has_keypoints')
+                for field in instance_fields:
+                    present = field in targets[i]
+                    shifted_present = field in shifted_targets[i]
+                    if present != shifted_present:
+                        raise ValueError(
+                            f'MixUp target schema mismatch for field {field!r}: '
+                            f'batch item {i} and its shifted partner must both '
+                            'contain the field or both omit it')
+                    if present:
+                        updated_targets[i][field] = torch.cat(
+                            [targets[i][field], shifted_targets[i][field]], dim=0)
 
                 # Add mixup ratio to targets
                 updated_targets[i]['mixup'] = torch.tensor(
