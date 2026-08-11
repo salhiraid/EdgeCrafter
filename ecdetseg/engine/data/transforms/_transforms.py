@@ -341,10 +341,6 @@ class KeypointSanitizeBoundingBoxes(nn.Module):
 SanitizeBoundingBoxes = KeypointSanitizeBoundingBoxes
 
 
-# Public compatibility alias imported by transforms.__init__.
-SanitizeBoundingBoxes = KeypointSanitizeBoundingBoxes
-
-
 @register()
 class ConvertPILImage(T.Transform):
     _transformed_types = (

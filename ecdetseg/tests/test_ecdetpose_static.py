@@ -293,3 +293,25 @@ def test_training_validates_normalized_target_boxes():
     assert "_validate_target_boxes(targets)" in source
     assert "Target boxes must be normalized CXCYWH values in [0, 1]" in source
     assert "ConvertBoxes(fmt=\"cxcywh\", normalize=True)" in source
+
+
+def test_training_gt_visualization_is_configurable_and_wired():
+    yaml = pytest.importorskip("yaml")
+    config = yaml.safe_load((
+        ROOT / "configs" / "ecdetpose" / "examples"
+        / "ecdetpose_s_vehicle_31kpts.yml"
+    ).read_text(encoding="utf-8"))
+    assert config["train_gt_visualization_interval"] == 10
+    assert config["train_gt_visualization_images"] == 2
+
+    engine_source = (ROOT / "engine" / "solver" / "ec_engine.py").read_text(
+        encoding="utf-8")
+    solver_source = (ROOT / "engine" / "solver" / "ec_solver.py").read_text(
+        encoding="utf-8")
+    base_config_source = (ROOT / "engine" / "core" / "_config.py").read_text(
+        encoding="utf-8")
+    assert "_visualize_training_ground_truth(" in engine_source
+    assert "training_ground_truth" in engine_source
+    assert "Training_ground_truth/sample_" in engine_source
+    assert "train_gt_visualization_interval=getattr(" in solver_source
+    assert "self.train_gt_visualization_interval :int = 0" in base_config_source

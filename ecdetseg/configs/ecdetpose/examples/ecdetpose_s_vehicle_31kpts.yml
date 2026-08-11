@@ -3,6 +3,9 @@ __include__: [
 ]
 
 output_dir: outputs/ecdetpose_s_vehicle_31kpts
+# Save random post-augmentation GT overlays for checking transform correctness.
+train_gt_visualization_interval: 10
+train_gt_visualization_images: 2
 num_classes: 1
 num_keypoints: 31
 remap_mscoco_category: False

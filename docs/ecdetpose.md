@@ -405,3 +405,21 @@ before the model runs and reports dataset/image context. With `loss_bbox: 5`, a
 properly normalized per-layer bbox loss should be on the order of units, not
 thousands. The total displayed loss sums the main, auxiliary, encoder, and
 denoising losses, so one malformed bbox loss is repeated many times.
+
+### Inspect training augmentation with GT overlays
+
+Set `train_gt_visualization_interval: 10` to render random pose-annotated samples from the
+post-augmentation training batch (falling back to any sample if none has pose GT) every ten global iterations. Set
+`train_gt_visualization_images` to the number of random batch items saved at
+each interval. Images are denormalized, while normalized `CXCYWH` boxes and
+normalized keypoints are projected back onto the transformed model input.
+Green rectangles are GT boxes, red points are visible (`v=2`) keypoints, orange
+points are labeled-but-occluded (`v=1`) keypoints, and `v=0` or bbox-only
+placeholders are omitted.
+
+JPEGs are written to
+`<output_dir>/training_ground_truth/epoch_XXXX/step_XXXXXXXX_image_<id>.jpg` and
+the same images appear in TensorBoard under `Training_ground_truth/sample_N`.
+These are intentionally transformed training images—not original-resolution
+files—so they show exactly what the model receives after resize, flip, MixUp,
+and other enabled augmentation. Set the interval to `0` to disable this output.

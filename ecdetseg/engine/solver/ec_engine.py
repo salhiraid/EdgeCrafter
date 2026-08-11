@@ -38,6 +38,11 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
     ema :ModelEMA = kwargs.get('ema', None)
     scaler :GradScaler = kwargs.get('scaler', None)
     lr_warmup_scheduler = kwargs.get('lr_warmup_scheduler', None)
+    output_dir = kwargs.get('output_dir', None)
+    train_gt_visualization_interval = int(
+        kwargs.get('train_gt_visualization_interval', 0) or 0)
+    train_gt_visualization_images = int(
+        kwargs.get('train_gt_visualization_images', 1) or 1)
 
     cur_iters = epoch * len(data_loader)
 
@@ -48,6 +53,13 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
         _validate_target_boxes(targets)
         global_step = epoch * len(data_loader) + i
         metas = dict(epoch=epoch, step=i, global_step=global_step, epoch_step=len(data_loader))
+
+        if (train_gt_visualization_interval > 0
+                and global_step % train_gt_visualization_interval == 0
+                and dist_utils.is_main_process()):
+            _visualize_training_ground_truth(
+                samples, targets, writer, output_dir, epoch, global_step,
+                max_images=train_gt_visualization_images)
 
         if scaler is not None:
             with torch.autocast(device_type=str(device), cache_enabled=True):
@@ -173,6 +185,107 @@ def _validate_target_boxes(targets):
                 'torchvision BoundingBoxes object after sanitization.')
         if (boxes[:, 2:] <= 0).any():
             raise ValueError(f'Target boxes contain non-positive width/height at {context}')
+
+
+def _visualize_training_ground_truth(samples, targets, writer, output_dir,
+                                     epoch, global_step, max_images=1):
+    """Render post-augmentation GT boxes/keypoints for pipeline inspection."""
+    if len(samples) == 0 or max_images <= 0:
+        return 0
+
+    mean = samples.new_tensor([0.485, 0.456, 0.406])[:, None, None]
+    std = samples.new_tensor([0.229, 0.224, 0.225])[:, None, None]
+    generator = torch.Generator(device='cpu')
+    generator.manual_seed(int(global_step))
+    pose_candidates = []
+    for batch_index, target in enumerate(targets):
+        keypoints = target.get('keypoints')
+        keypoint_valid = target.get(
+            'keypoint_valid', target.get('has_keypoints'))
+        has_annotated_pose = (
+            keypoints is not None and keypoints.numel() > 0
+            and (keypoints[..., 2] > 0).any()
+            and (keypoint_valid is None or keypoint_valid.bool().any()))
+        if has_annotated_pose:
+            pose_candidates.append(batch_index)
+    candidates = pose_candidates or list(range(len(samples)))
+    order = torch.randperm(len(candidates), generator=generator)[:max_images]
+    selected = [candidates[index] for index in order.tolist()]
+
+    save_dir = None
+    if output_dir is not None:
+        save_dir = (Path(output_dir) / 'training_ground_truth'
+                    / f'epoch_{int(epoch):04d}')
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+    rendered = 0
+    for slot, batch_index in enumerate(selected):
+        sample = samples[batch_index]
+        target = targets[batch_index]
+        image_tensor = (
+            sample.detach().cpu() * std.detach().cpu() + mean.detach().cpu()
+        ).clamp(0, 1)
+        image_array = (
+            image_tensor.mul(255).byte().permute(1, 2, 0).numpy())
+        image = Image.fromarray(image_array)
+        draw = ImageDraw.Draw(image)
+        width, height = image.size
+
+        boxes = target.get('boxes')
+        labels = target.get('labels')
+        if boxes is not None:
+            boxes = boxes.detach().cpu()
+            labels = labels.detach().cpu() if labels is not None else None
+            for instance_index, (cx, cy, bw, bh) in enumerate(boxes.tolist()):
+                x1 = (cx - bw / 2.0) * width
+                y1 = (cy - bh / 2.0) * height
+                x2 = (cx + bw / 2.0) * width
+                y2 = (cy + bh / 2.0) * height
+                draw.rectangle((x1, y1, x2, y2), outline=(0, 255, 0), width=2)
+                label = int(labels[instance_index]) if labels is not None else -1
+                draw.text((x1 + 2, y1 + 2), f'gt:{label}', fill=(0, 255, 0))
+
+        keypoints = target.get('keypoints')
+        keypoint_valid = target.get(
+            'keypoint_valid', target.get('has_keypoints'))
+        if keypoints is not None:
+            keypoints = keypoints.detach().cpu()
+            if keypoint_valid is None:
+                keypoint_valid = torch.ones(
+                    len(keypoints), dtype=torch.bool)
+            else:
+                keypoint_valid = keypoint_valid.detach().cpu().bool()
+            for instance_index, instance_keypoints in enumerate(keypoints):
+                if not bool(keypoint_valid[instance_index]):
+                    continue
+                for keypoint_index, (x, y, visibility) in enumerate(
+                        instance_keypoints.tolist()):
+                    if visibility <= 0:
+                        continue
+                    px, py = x * width, y * height
+                    if not (0 <= px < width and 0 <= py < height):
+                        continue
+                    color = (255, 64, 64) if visibility >= 2 else (255, 165, 0)
+                    radius = 3
+                    draw.ellipse(
+                        (px - radius, py - radius, px + radius, py + radius),
+                        fill=color, outline=(255, 255, 255))
+                    draw.text((px + 4, py - 4), str(keypoint_index), fill=color)
+
+        image_id = target.get('image_id')
+        image_id = int(image_id.item()) if image_id is not None else batch_index
+        if save_dir is not None:
+            image.save(
+                save_dir / f'step_{int(global_step):08d}_image_{image_id}.jpg',
+                quality=95)
+        if writer is not None:
+            tensorboard_image = torch.from_numpy(
+                np.asarray(image).copy()).permute(2, 0, 1)
+            writer.add_image(
+                f'Training_ground_truth/sample_{slot}', tensorboard_image,
+                global_step)
+        rendered += 1
+    return rendered
 
 
 @torch.no_grad()

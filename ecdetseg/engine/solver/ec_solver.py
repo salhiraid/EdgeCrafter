@@ -103,7 +103,12 @@ class ECSolver(BaseSolver):
                 ema=self.ema, 
                 scaler=self.scaler, 
                 lr_warmup_scheduler=self.lr_warmup_scheduler,
-                writer=self.writer
+                writer=self.writer,
+                output_dir=self.output_dir,
+                train_gt_visualization_interval=getattr(
+                    args, 'train_gt_visualization_interval', 0),
+                train_gt_visualization_images=getattr(
+                    args, 'train_gt_visualization_images', 1),
             )
 
             if not self.self_lr_scheduler:  # update by epoch 
