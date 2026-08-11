@@ -1,0 +1,45 @@
+# Decoupled, deeper coordinate/visibility branches with a dedicated head LR.
+# AdamW is retained because ECDetPose is transformer-based.
+__include__: ['ecdetpose_m_vehicle_31kpts.yml']
+
+output_dir: outputs/ecdetpose_m_vehicle_decoupled_head
+
+epochs: 62
+warmup_iter: 2000
+lr_gamma: 0.05
+clip_max_norm: 0.1
+use_ema: true
+ema_decay: 0.9999
+
+ECTransformer:
+  keypoint_head_layers: 4
+  keypoint_head_hidden_dim: 512
+  keypoint_visibility_head_layers: 3
+
+optimizer:
+  type: AdamW
+  params:
+    # Backbone: 20x below the default non-backbone LR.
+    - {name: backbone, params: '^(?=.*.backbone)(?!.*(?:norm|bn|bias)).*$', lr: 0.000025}
+    - {name: backbone_no_decay, params: '^(?=.*.backbone)(?=.*(?:norm|bn|bias)).*$', lr: 0.000025, weight_decay: 0.0}
+    # New pose branches: 2x the default LR; biases are not decayed.
+    - {name: pose_head, params: '^(?=.*(?:dec_keypoint_xy_head|dec_keypoint_vis_head))(?!.*(?:norm|bn|bias)).*$', lr: 0.001, weight_decay: 0.0001}
+    - {name: pose_head_no_decay, params: '^(?=.*(?:dec_keypoint_xy_head|dec_keypoint_vis_head))(?=.*(?:norm|bn|bias)).*$', lr: 0.001, weight_decay: 0.0}
+    # Other non-backbone norm/bias parameters keep zero decay.
+    - {name: other_no_decay, params: '^(?!.*\.backbone)(?!.*(?:dec_keypoint_xy_head|dec_keypoint_vis_head))(?=.*(?:norm|bn|bias)).*$', weight_decay: 0.0}
+  lr: 0.0005
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+ECCriterion:
+  weight_dict:
+    loss_keypoint: 10
+    loss_oks: 6
+    loss_keypoint_visibility: 1
+  matcher:
+    weight_dict:
+      cost_class: 2
+      cost_bbox: 5
+      cost_giou: 2
+      keypoint_cost_weight: 2
+      oks_cost_weight: 0
