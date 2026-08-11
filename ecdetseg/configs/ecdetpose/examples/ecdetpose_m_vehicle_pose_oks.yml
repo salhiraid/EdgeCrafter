@@ -1,0 +1,19 @@
+__include__: ['ecdetpose_m_vehicle_31kpts.yml']
+
+output_dir: outputs/ecdetpose_m_vehicle_pose_oks
+
+# Scale-aware ablation: emphasize OKS in both training and Hungarian matching.
+# Matcher sigmas must use the same 31-keypoint definition as the criterion.
+ECCriterion:
+  weight_dict:
+    loss_keypoint: 8
+    loss_oks: 10
+    loss_keypoint_visibility: 1
+  matcher:
+    keypoint_oks_sigmas: [0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025]
+    weight_dict:
+      cost_class: 2
+      cost_bbox: 5
+      cost_giou: 2
+      keypoint_cost_weight: 1
+      oks_cost_weight: 4
