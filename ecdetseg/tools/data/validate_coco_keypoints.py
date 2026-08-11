@@ -49,7 +49,7 @@ def validate(dataset, num_keypoints=None):
             report["crowd_annotations"] += 1
 
         keypoints = ann.get("keypoints")
-        if keypoints is None:
+        if not keypoints:
             report["objects_with_missing_keypoints"] += 1
             continue
         if num_keypoints is None or len(keypoints) != num_keypoints * 3:
