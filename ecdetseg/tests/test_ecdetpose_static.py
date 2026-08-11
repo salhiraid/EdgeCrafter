@@ -315,3 +315,40 @@ def test_training_gt_visualization_is_configurable_and_wired():
     assert "Training_ground_truth/sample_" in engine_source
     assert "train_gt_visualization_interval=getattr(" in solver_source
     assert "self.train_gt_visualization_interval :int = 0" in base_config_source
+
+
+def test_decoupled_pose_head_optimizer_recipes():
+    yaml = pytest.importorskip("yaml")
+    examples = ROOT / "configs" / "ecdetpose" / "examples"
+    for size, hidden in (("s", 384), ("m", 512)):
+        config = yaml.safe_load((
+            examples / f"ecdetpose_{size}_vehicle_decoupled_head.yml"
+        ).read_text(encoding="utf-8"))
+        transformer = config["ECTransformer"]
+        assert transformer["keypoint_head_layers"] == 4
+        assert transformer["keypoint_head_hidden_dim"] == hidden
+        assert transformer["keypoint_visibility_head_layers"] == 3
+        assert config["optimizer"]["type"] == "AdamW"
+        assert config["optimizer"]["lr"] == pytest.approx(0.0005)
+        assert any(group.get("lr") == pytest.approx(0.001)
+                   for group in config["optimizer"]["params"])
+        assert config["lr_gamma"] == pytest.approx(0.05)
+        assert config["clip_max_norm"] == pytest.approx(0.1)
+
+
+def test_optimizer_parameter_groups_reject_regex_overlap():
+    source = (ROOT / "engine" / "core" / "yaml_config.py").read_text(
+        encoding="utf-8")
+    assert "Optimizer parameter regex" in source
+    assert "overlaps a previous" in source
+    engine_source = (ROOT / "engine" / "solver" / "ec_engine.py").read_text(
+        encoding="utf-8")
+    assert "group_name = pg.get('name', f'pg_{j}')" in engine_source
+
+
+def test_visibility_head_depth_is_configurable():
+    source = (ROOT / "engine" / "edgecrafter" / "decoder.py").read_text(
+        encoding="utf-8")
+    assert "keypoint_head_hidden_dim=None" in source
+    assert "keypoint_visibility_head_layers=1" in source
+    assert "final_layer = vis_head.layers[-1]" in source

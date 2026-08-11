@@ -423,3 +423,35 @@ the same images appear in TensorBoard under `Training_ground_truth/sample_N`.
 These are intentionally transformed training images—not original-resolution
 files—so they show exactly what the model receives after resize, flip, MixUp,
 and other enabled augmentation. Set the interval to `0` to disable this output.
+
+## Optimizer, learning-rate, and decoupled pose-head recipe
+
+ECDetPose uses regex-based optimizer parameter groups. Parameters matched by a
+group receive that group's `lr` and `weight_decay`; unmatched trainable
+parameters receive the optimizer-level defaults. Regexes must not overlap.
+`FlatCosineLRScheduler` applies quadratic iteration warmup, cosine decay to
+`base_lr * lr_gamma`, then a constant no-augmentation tail.
+
+The `ecdetpose_{s,m}_vehicle_decoupled_head.yml` recipes provide a
+YOLOX-Pose-inspired separation while retaining the transformer query design:
+a four-layer coordinate MLP and a separate three-layer visibility MLP are
+attached to each decoder layer. The S recipe uses 384 hidden channels and the M
+recipe uses 512. This is not a convolutional YOLOX head or SimOTA—the existing
+Hungarian query assignment remains—but coordinate and visibility branches have
+independent capacity.
+
+The recipes use AdamW with default non-backbone LR `5e-4`, backbone LR `2.5e-5`,
+and pose-head LR `1e-3`. Norm/bias decay is zero, other decay is `1e-4`, warmup
+is 2000 iterations, minimum LR is 5% of each parameter group's base LR, gradient
+clipping is `0.1`, and EMA is enabled. Start with these values rather than YOLOX
+SGD `0.005`: transformer training and effective batch sizes differ materially.
+Scale all three learning rates together when changing global batch size, then
+adjust the head multiplier separately only if pose learns too slowly or becomes
+unstable.
+
+Named optimizer groups are logged as `Lr/backbone`,
+`Lr/backbone_no_decay`, `Lr/pose_head`, `Lr/pose_head_no_decay`, and
+`Lr/other_no_decay`; unmatched parameters appear in the automatically appended
+default group. To fine-tune from a checkpoint while applying these new optimizer
+settings, use `-t`; `-r` restores the checkpoint optimizer/scheduler state and
+is intended only for continuing the same run.
