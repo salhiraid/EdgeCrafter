@@ -217,7 +217,8 @@ class ConvertCocoPolysToMask(object):
                 raise ValueError(f"Malformed keypoints for image_id={int(image_id.item())}: length is not divisible by 3")
             inferred = next(iter(lengths)) // 3 if lengths else 0
             keypoints = torch.as_tensor([obj.get("keypoints", [0.0] * (inferred * 3)) for obj in anno], dtype=torch.float32).reshape(-1, inferred, 3)
-            keypoint_valid = torch.tensor(["keypoints" in obj for obj in anno], dtype=torch.bool)
+            keypoint_valid = torch.tensor(
+                [bool(obj.get("keypoints")) for obj in anno], dtype=torch.bool)
 
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
         boxes = boxes[keep]

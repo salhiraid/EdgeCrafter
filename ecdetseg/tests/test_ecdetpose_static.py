@@ -251,9 +251,23 @@ def test_pose_loss_and_matcher_ablation_configs():
 def test_matcher_oks_uses_normalized_box_area_and_configured_sigmas():
     source = (ROOT / "engine" / "edgecrafter" / "matcher.py").read_text(
         encoding="utf-8")
-    assert "areas = (tgt_bbox[:, 2] * tgt_bbox[:, 3])" in source
+    assert "tgt_bbox[pose_valid, 2] * tgt_bbox[pose_valid, 3]" in source
     assert "self.keypoint_oks_sigmas" in source
-    assert "cost_oks[:, ~pose_valid] = 0.0" in source
+    assert "cost_oks = out_keypoints.new_zeros" in source
+    assert "cost_oks[:, pose_valid] = 1.0 - oks" in source
+
+
+def test_matcher_does_not_evaluate_bbox_only_pose_columns():
+    matcher_source = (ROOT / "engine" / "edgecrafter" / "matcher.py").read_text(
+        encoding="utf-8")
+    dataset_source = (
+        ROOT / "engine" / "data" / "dataset" / "coco_dataset.py"
+    ).read_text(encoding="utf-8")
+    assert "pose_valid = valid.any(dim=1)" in matcher_source
+    assert "pose_targets = tgt_keypoints[pose_valid]" in matcher_source
+    assert "pose_joint_valid = valid[pose_valid]" in matcher_source
+    assert "cost_keypoint[:, pose_valid] = pose_cost_keypoint" in matcher_source
+    assert "bool(obj.get(\"keypoints\"))" in dataset_source
 
 
 def test_legacy_sanitizer_and_mixup_keep_pose_fields_aligned():

@@ -157,33 +157,58 @@ class HungarianMatcher(nn.Module):
                     for v in targets
                 ]).to(device=out_keypoints.device, dtype=torch.bool)
                 valid = (tgt_keypoints[..., 2] > 0) & instance_valid[:, None]
-                distance = (out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]).abs().sum(-1)
-                valid_f = valid[None].to(distance.dtype)
-                cost_keypoint = (distance * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
-
-                # Keypoints and boxes have both been normalized by the pose
-                # pipeline, so use normalized bbox area here. COCO's raw pixel
-                # area would make the OKS matching cost almost constant.
-                areas = (tgt_bbox[:, 2] * tgt_bbox[:, 3]).to(out_keypoints.device).clamp(min=1e-6)
-                squared_distance = ((out_keypoints[:, None] - tgt_keypoints[None, :, :, :2]) ** 2).sum(-1)
-                if self.keypoint_oks_sigmas is None:
-                    sigmas = out_keypoints.new_full((tgt_keypoints.shape[1],), 0.1)
-                else:
-                    if len(self.keypoint_oks_sigmas) != tgt_keypoints.shape[1]:
-                        raise ValueError(
-                            'HungarianMatcher keypoint_oks_sigmas must contain '
-                            f'{tgt_keypoints.shape[1]} values, got '
-                            f'{len(self.keypoint_oks_sigmas)}')
-                    sigmas = out_keypoints.new_tensor(self.keypoint_oks_sigmas)
-                variances = (sigmas * 2) ** 2
-                denom = areas[None, :, None] * variances[None, None, :] * 2.0
-                oks = torch.exp(-squared_distance / denom.clamp(min=1e-12))
-                oks = (oks * valid_f).sum(-1) / valid_f.sum(-1).clamp(min=1)
-                cost_oks = 1.0 - oks
-                # Bbox-only instances have no meaningful pose matching cost.
+                # A bbox-only placeholder has keypoint_valid=False. An
+                # annotated instance whose joints are all v=0 likewise has no
+                # coordinate supervision. Do not even evaluate pose distances
+                # for those target columns: their matching remains purely
+                # classification + bbox + GIoU.
                 pose_valid = valid.any(dim=1)
-                cost_keypoint[:, ~pose_valid] = 0.0
-                cost_oks[:, ~pose_valid] = 0.0
+                num_predictions, num_targets = out_keypoints.shape[0], tgt_keypoints.shape[0]
+                if self.cost_keypoint:
+                    cost_keypoint = out_keypoints.new_zeros((num_predictions, num_targets))
+                if self.cost_oks:
+                    cost_oks = out_keypoints.new_zeros((num_predictions, num_targets))
+
+                if pose_valid.any():
+                    pose_targets = tgt_keypoints[pose_valid]
+                    pose_joint_valid = valid[pose_valid]
+                    valid_f = pose_joint_valid[None].to(out_keypoints.dtype)
+
+                    if self.cost_keypoint:
+                        distance = (
+                            out_keypoints[:, None] - pose_targets[None, :, :, :2]
+                        ).abs().sum(-1)
+                        pose_cost_keypoint = (
+                            (distance * valid_f).sum(-1)
+                            / valid_f.sum(-1).clamp(min=1))
+                        cost_keypoint[:, pose_valid] = pose_cost_keypoint
+
+                    if self.cost_oks:
+                        # Keypoints and boxes are normalized, so raw COCO pixel
+                        # area must not be used in this matching term.
+                        areas = (
+                            tgt_bbox[pose_valid, 2] * tgt_bbox[pose_valid, 3]
+                        ).to(out_keypoints.device).clamp(min=1e-6)
+                        squared_distance = ((
+                            out_keypoints[:, None] - pose_targets[None, :, :, :2]
+                        ) ** 2).sum(-1)
+                        if self.keypoint_oks_sigmas is None:
+                            sigmas = out_keypoints.new_full(
+                                (tgt_keypoints.shape[1],), 0.1)
+                        else:
+                            if len(self.keypoint_oks_sigmas) != tgt_keypoints.shape[1]:
+                                raise ValueError(
+                                    'HungarianMatcher keypoint_oks_sigmas must contain '
+                                    f'{tgt_keypoints.shape[1]} values, got '
+                                    f'{len(self.keypoint_oks_sigmas)}')
+                            sigmas = out_keypoints.new_tensor(self.keypoint_oks_sigmas)
+                        variances = (sigmas * 2) ** 2
+                        denom = areas[None, :, None] * variances[None, None, :] * 2.0
+                        oks = torch.exp(-squared_distance / denom.clamp(min=1e-12))
+                        oks = (
+                            (oks * valid_f).sum(-1)
+                            / valid_f.sum(-1).clamp(min=1))
+                        cost_oks[:, pose_valid] = 1.0 - oks
         
         masks_present = "masks" in targets[0] and 'pred_masks' in outputs
         if masks_present:

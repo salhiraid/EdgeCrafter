@@ -455,3 +455,15 @@ Named optimizer groups are logged as `Lr/backbone`,
 default group. To fine-tune from a checkpoint while applying these new optimizer
 settings, use `-t`; `-r` restores the checkpoint optimizer/scheduler state and
 is intended only for continuing the same run.
+
+### Hungarian matching for bbox-only ground truth
+
+A missing or empty COCO `keypoints` array is loaded as a zero placeholder with
+`keypoint_valid=False`. The matcher builds `pose_valid` from both that instance
+flag and per-joint `v>0`. It allocates zero keypoint/OKS cost matrices, computes
+pose distances only for `pose_valid` target columns, and scatters those costs
+back into the full matrix. Consequently a bbox-only target is assigned using
+only classification, bbox L1, and GIoU costs even when
+`keypoint_cost_weight`/`oks_cost_weight` are nonzero. An annotated instance with
+all joints at `v=0` is also excluded from coordinate/OKS matching, while its
+visibility labels can still be supervised by the criterion.
