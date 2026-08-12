@@ -33,6 +33,10 @@ ECCriterion:
   }
   losses: ['mal', 'boxes', 'local', 'keypoints']
   num_keypoints: 31
+  # Normalized coordinates need L1 (or a small-beta Smooth-L1). The PyTorch
+  # Smooth-L1 default beta=1 makes pose loss and gradients artificially tiny.
+  keypoint_coordinate_loss: l1
+  keypoint_smooth_l1_beta: 0.05
   keypoint_oks_sigmas: [
     0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,
     0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,

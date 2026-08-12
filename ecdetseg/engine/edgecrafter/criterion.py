@@ -49,6 +49,8 @@ class ECCriterion(nn.Module):
         mask_point_sample_ratio=None,
         num_keypoints=0,
         keypoint_oks_sigmas=None,
+        keypoint_coordinate_loss='l1',
+        keypoint_smooth_l1_beta=0.05,
         ):
         super().__init__()
         self.num_classes = num_classes
@@ -68,6 +70,14 @@ class ECCriterion(nn.Module):
         self.mask_point_sample_ratio = matcher.mask_point_sample_ratio
         self.num_keypoints = int(num_keypoints or 0)
         self.keypoint_oks_sigmas = keypoint_oks_sigmas
+        self.keypoint_coordinate_loss = keypoint_coordinate_loss.lower()
+        self.keypoint_smooth_l1_beta = float(keypoint_smooth_l1_beta)
+        if self.keypoint_coordinate_loss not in ('l1', 'smooth_l1'):
+            raise ValueError(
+                "keypoint_coordinate_loss must be 'l1' or 'smooth_l1', got "
+                f'{keypoint_coordinate_loss!r}')
+        if self.keypoint_smooth_l1_beta <= 0:
+            raise ValueError('keypoint_smooth_l1_beta must be greater than zero')
         if self.num_keypoints > 0 and keypoint_oks_sigmas is not None and len(keypoint_oks_sigmas) != self.num_keypoints:
             raise ValueError(
                 f"keypoint_oks_sigmas length ({len(keypoint_oks_sigmas)}) must match num_keypoints ({self.num_keypoints})"
@@ -282,7 +292,19 @@ class ECCriterion(nn.Module):
         visible = tgt_keypoints[..., 2] > 1
         coordinate_count = coordinate_valid.sum().clamp(min=1).to(src_keypoints.dtype)
 
-        coord_loss = F.smooth_l1_loss(src_keypoints, tgt_keypoints[..., :2], reduction='none')
+        # Coordinates are normalized to [0, 1]. PyTorch's default Smooth-L1
+        # beta=1 therefore puts virtually every error in the quadratic branch,
+        # producing deceptively small values and gradients (for example a
+        # 0.1 coordinate error contributes only 0.005). L1 is the default for
+        # pose localization and matches the Hungarian coordinate cost. A
+        # small-beta Smooth-L1 remains available explicitly for noisy labels.
+        if self.keypoint_coordinate_loss == 'l1':
+            coord_loss = F.l1_loss(
+                src_keypoints, tgt_keypoints[..., :2], reduction='none')
+        else:
+            coord_loss = F.smooth_l1_loss(
+                src_keypoints, tgt_keypoints[..., :2], reduction='none',
+                beta=self.keypoint_smooth_l1_beta)
         coord_loss = (coord_loss.sum(-1) * coordinate_valid.to(coord_loss.dtype)).sum() / coordinate_count
 
         # Visibility is supervised for every joint of annotated instances,

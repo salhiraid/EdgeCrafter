@@ -281,6 +281,20 @@ def test_matcher_requires_pose_predictions_when_pose_costs_are_enabled():
     assert "use_keypoint_costs=False" in criterion_source
     assert "for i, aux_outputs in enumerate(outputs['aux_outputs']):" in criterion_source
     assert "outputs['pre_outputs'], targets," in criterion_source
+    assert "expected_prefix = (bs, num_queries)" in matcher_source
+
+
+def test_coordinate_loss_uses_l1_for_normalized_keypoints():
+    yaml = pytest.importorskip("yaml")
+    criterion_source = (ROOT / "engine" / "edgecrafter" / "criterion.py").read_text(
+        encoding="utf-8")
+    config = yaml.safe_load((ROOT / "configs" / "ecdetpose" / "ecdetpose.yml")
+                            .read_text(encoding="utf-8"))
+    criterion = config["ECCriterion"]
+    assert criterion["keypoint_coordinate_loss"] == "l1"
+    assert criterion["keypoint_smooth_l1_beta"] < 1
+    assert "coord_loss = F.l1_loss(" in criterion_source
+    assert "beta=self.keypoint_smooth_l1_beta" in criterion_source
 
 
 def test_legacy_sanitizer_and_mixup_keep_pose_fields_aligned():
@@ -391,6 +405,9 @@ def test_matcher_debug_logs_costs_matches_and_images():
     assert "return_diagnostics=False" in matcher_source
     assert "'weighted_components'" not in matcher_source  # implementation variable, not serialized state
     assert "result['diagnostics']" in matcher_source
+    assert "'pred_keypoints_xy'" in engine_source
+    assert "'pred_keypoint_coordinate_std'" in engine_source
+    assert "f'P{joint_index}'" in engine_source
     assert "_debug_hungarian_matches(" in engine_source
     assert "matches.jsonl" in engine_source
     assert "top_query_alternatives" in engine_source

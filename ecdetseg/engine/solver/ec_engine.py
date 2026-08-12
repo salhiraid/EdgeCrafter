@@ -388,14 +388,35 @@ def _debug_hungarian_matches(samples, targets, outputs, matcher, writer,
             if pose_coordinate_valid and pred_keypoints is not None:
                 gt_kpts = gt_keypoints[target_index].detach().cpu()
                 pred_kpts = pred_keypoints[batch_index, pred_index].detach().cpu()
+                pred_vis_scores = (pred_visibility[batch_index, pred_index]
+                                   .detach().float().sigmoid().cpu()
+                                   if pred_visibility is not None else None)
                 valid_joints = gt_kpts[:, 2] > 0
                 errors = torch.linalg.vector_norm(
                     pred_kpts[valid_joints] - gt_kpts[valid_joints, :2], dim=-1)
                 record['normalized_keypoint_error_mean'] = float(errors.mean())
                 record['normalized_keypoint_error_max'] = float(errors.max())
-                if pred_visibility is not None:
+                record['gt_keypoints_xyv'] = gt_kpts.tolist()
+                record['pred_keypoints_xy'] = pred_kpts.tolist()
+                record['pred_keypoint_coordinate_std'] = (
+                    pred_kpts.float().std(dim=0).tolist())
+                if pred_vis_scores is not None:
                     record['predicted_visibility_mean'] = float(
-                        pred_visibility[batch_index, pred_index].sigmoid().mean())
+                        pred_vis_scores.mean())
+                    record['pred_keypoint_visibility_scores'] = (
+                        pred_vis_scores.tolist())
+
+                # Draw every predicted joint, including predictions whose GT
+                # joint is unlabeled. A red cross is the actual tensor passed
+                # to HungarianMatcher; green circles are GT. This makes a
+                # collapsed center prediction immediately distinguishable
+                # from a rendering or target-coordinate problem.
+                for joint_index, (pred_x, pred_y) in enumerate(pred_kpts.tolist()):
+                    px, py = pred_x * width, pred_y * height
+                    draw.line((px - 4, py, px + 4, py), fill=(255, 32, 32), width=2)
+                    draw.line((px, py - 4, px, py + 4), fill=(255, 32, 32), width=2)
+                    draw.text((px + 5, py + 2), f'P{joint_index}', fill=(255, 32, 32))
+
                 for joint_index, ((gt_x, gt_y, visibility), (pred_x, pred_y)) in enumerate(
                         zip(gt_kpts.tolist(), pred_kpts.tolist())):
                     if visibility <= 0:
@@ -403,9 +424,8 @@ def _debug_hungarian_matches(samples, targets, outputs, matcher, writer,
                     draw.ellipse((gt_x * width - 3, gt_y * height - 3,
                                   gt_x * width + 3, gt_y * height + 3),
                                  fill=(0, 255, 0))
-                    draw.ellipse((pred_x * width - 3, pred_y * height - 3,
-                                  pred_x * width + 3, pred_y * height + 3),
-                                 fill=(255, 64, 64))
+                    draw.text((gt_x * width + 4, gt_y * height - 5),
+                              f'G{joint_index}', fill=(0, 255, 0))
                     draw.line((gt_x * width, gt_y * height,
                                pred_x * width, pred_y * height),
                               fill=(255, 255, 0), width=1)

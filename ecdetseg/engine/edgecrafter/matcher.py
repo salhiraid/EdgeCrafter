@@ -168,12 +168,29 @@ class HungarianMatcher(nn.Module):
                     'BBox-only instances must still have zero-filled keypoints '
                     'and keypoint_valid=False so instance rows remain aligned.')
 
-            out_keypoints = outputs['pred_keypoints'].flatten(0, 1)
-            if out_keypoints.ndim != 3 or out_keypoints.shape[-1] != 2:
+            predicted_keypoints = outputs['pred_keypoints']
+            expected_prefix = (bs, num_queries)
+            if (predicted_keypoints.ndim != 4
+                    or tuple(predicted_keypoints.shape[:2]) != expected_prefix
+                    or predicted_keypoints.shape[-1] != 2):
                 raise ValueError(
                     "outputs['pred_keypoints'] must have shape [B, Q, K, 2], "
-                    f'got {tuple(outputs["pred_keypoints"].shape)}')
+                    f'with B={bs} and Q={num_queries}, got '
+                    f'{tuple(predicted_keypoints.shape)}')
+            if not torch.isfinite(predicted_keypoints).all():
+                raise ValueError(
+                    "outputs['pred_keypoints'] contains non-finite coordinates")
+            out_keypoints = predicted_keypoints.flatten(0, 1)
             tgt_keypoints = torch.cat([v['keypoints'] for v in targets]).to(out_keypoints.device)
+            if tgt_keypoints.ndim != 3 or tgt_keypoints.shape[-1] != 3:
+                raise ValueError(
+                    "target keypoints must have shape [N, K, 3], got "
+                    f'{tuple(tgt_keypoints.shape)}')
+            if tgt_keypoints.shape[1] != out_keypoints.shape[1]:
+                raise ValueError(
+                    'Predicted and target keypoint counts differ: '
+                    f'{out_keypoints.shape[1]} predictions versus '
+                    f'{tgt_keypoints.shape[1]} targets')
             if tgt_keypoints.numel() > 0:
                 instance_valid = torch.cat([
                     v.get('keypoint_valid', v.get('has_keypoints', torch.ones(
