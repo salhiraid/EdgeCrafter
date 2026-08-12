@@ -452,6 +452,8 @@ class ECTransformer(nn.Module):
                  num_keypoints=0,
                  constrain_keypoints_to_box=True,
                  keypoint_head_layers=3,
+                 keypoint_head_hidden_dim=None,
+                 keypoint_visibility_head_layers=1,
                  ):
         super().__init__()
         assert len(feat_channels) <= num_levels
@@ -474,6 +476,8 @@ class ECTransformer(nn.Module):
         self.reg_max = reg_max
         self.num_keypoints = int(num_keypoints or 0)
         self.constrain_keypoints_to_box = constrain_keypoints_to_box
+        self.keypoint_head_hidden_dim = int(
+            keypoint_head_hidden_dim or hidden_dim)
 
         assert query_select_method in ('default', 'one2many', 'agnostic'), ''
         assert cross_attn_method in ('default', 'discrete'), ''
@@ -534,15 +538,26 @@ class ECTransformer(nn.Module):
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=activation) for _ in range(num_layers - self.eval_idx - 1)])
 
         if self.num_keypoints > 0:
-            keypoint_xy_head = MLP(hidden_dim, hidden_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
-            keypoint_vis_head = nn.Linear(hidden_dim, self.num_keypoints)
+            keypoint_xy_head = MLP(
+                hidden_dim, self.keypoint_head_hidden_dim,
+                self.num_keypoints * 2, keypoint_head_layers, act=activation)
+            keypoint_vis_head = (
+                nn.Linear(hidden_dim, self.num_keypoints)
+                if keypoint_visibility_head_layers == 1 else MLP(
+                    hidden_dim, self.keypoint_head_hidden_dim,
+                    self.num_keypoints, keypoint_visibility_head_layers,
+                    act=activation))
             self.dec_keypoint_xy_head = nn.ModuleList(
                 [keypoint_xy_head if share_bbox_head else copy.deepcopy(keypoint_xy_head) for _ in range(self.eval_idx + 1)]
-              + [MLP(scaled_dim, scaled_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
+              + [MLP(scaled_dim, self.keypoint_head_hidden_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
                  for _ in range(num_layers - self.eval_idx - 1)])
             self.dec_keypoint_vis_head = nn.ModuleList(
                 [keypoint_vis_head if share_score_head else copy.deepcopy(keypoint_vis_head) for _ in range(self.eval_idx + 1)]
-              + [nn.Linear(scaled_dim, self.num_keypoints) for _ in range(num_layers - self.eval_idx - 1)])
+              + [(nn.Linear(scaled_dim, self.num_keypoints)
+                  if keypoint_visibility_head_layers == 1 else MLP(
+                     scaled_dim, self.keypoint_head_hidden_dim, self.num_keypoints,
+                     keypoint_visibility_head_layers, act=activation))
+                 for _ in range(num_layers - self.eval_idx - 1)])
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -584,8 +599,9 @@ class ECTransformer(nn.Module):
                     init.constant_(xy_head.layers[-1].bias, 0)
             vis_bias = bias_init_with_prob(0.01)
             for vis_head in self.dec_keypoint_vis_head:
-                init.constant_(vis_head.weight, 0)
-                init.constant_(vis_head.bias, vis_bias)
+                final_layer = vis_head.layers[-1] if hasattr(vis_head, 'layers') else vis_head
+                init.constant_(final_layer.weight, 0)
+                init.constant_(final_layer.bias, vis_bias)
 
         if self.learn_query_content:
             init.xavier_uniform_(self.tgt_embed.weight)
