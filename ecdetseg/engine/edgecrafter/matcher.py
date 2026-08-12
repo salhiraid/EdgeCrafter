@@ -70,7 +70,8 @@ class HungarianMatcher(nn.Module):
         ), "all costs cant be 0"
 
     @torch.no_grad()
-    def forward(self, outputs: Dict[str, torch.Tensor], targets, return_topk=False):
+    def forward(self, outputs: Dict[str, torch.Tensor], targets, return_topk=False,
+                return_diagnostics=False):
         """Performs the matching
 
         Params:
@@ -238,11 +239,18 @@ class HungarianMatcher(nn.Module):
             cost_mask_dice = batch_dice_loss(pred_masks_logits, tgt_masks_flat)
             
         # Final cost matrix 3 * self.cost_bbox + 2 * self.cost_class + self.cost_giou
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        weighted_components = {
+            'class': self.cost_class * cost_class,
+            'bbox': self.cost_bbox * cost_bbox,
+            'giou': self.cost_giou * cost_giou,
+        }
+        C = sum(weighted_components.values())
         if cost_keypoint is not None:
-            C = C + self.cost_keypoint * cost_keypoint
+            weighted_components['keypoint'] = self.cost_keypoint * cost_keypoint
+            C = C + weighted_components['keypoint']
         if cost_oks is not None:
-            C = C + self.cost_oks * cost_oks
+            weighted_components['oks'] = self.cost_oks * cost_oks
+            C = C + weighted_components['oks']
         if masks_present:
             C = C + self.cost_mask_ce * cost_mask_ce + self.cost_mask_dice * cost_mask_dice
         C = C.view(bs, num_queries, -1).cpu()
@@ -263,7 +271,23 @@ class HungarianMatcher(nn.Module):
                 )
             }
 
-        return {"indices": indices}  # , 'indices_o2m': C.min(-1)[1]}
+        result = {"indices": indices}
+        if return_diagnostics:
+            component_batches = {
+                name: tensor.view(bs, num_queries, -1).cpu().split(sizes, -1)
+                for name, tensor in weighted_components.items()
+            }
+            result['diagnostics'] = [
+                {
+                    'total_cost': cost_batch[batch_index].detach(),
+                    'components': {
+                        name: batches[batch_index][batch_index].detach()
+                        for name, batches in component_batches.items()
+                    },
+                }
+                for batch_index, cost_batch in enumerate(C.split(sizes, -1))
+            ]
+        return result  # , 'indices_o2m': C.min(-1)[1]}
 
     def get_top_k_matches(self, C, sizes, k=1, initial_indices=None):
         indices_list = []

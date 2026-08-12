@@ -8,6 +8,7 @@ Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 
 import math
+import json
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -43,6 +44,8 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
         kwargs.get('train_gt_visualization_interval', 0) or 0)
     train_gt_visualization_images = int(
         kwargs.get('train_gt_visualization_images', 1) or 1)
+    matcher_debug_interval = int(kwargs.get('matcher_debug_interval', 0) or 0)
+    matcher_debug_images = int(kwargs.get('matcher_debug_images', 2) or 2)
 
     cur_iters = epoch * len(data_loader)
 
@@ -103,6 +106,13 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
             optimizer.step()
+
+        if (matcher_debug_interval > 0
+                and global_step % matcher_debug_interval == 0
+                and dist_utils.is_main_process()):
+            _debug_hungarian_matches(
+                samples, targets, outputs, criterion.matcher, writer,
+                output_dir, epoch, global_step, matcher_debug_images)
 
         # ema
         if ema is not None:
@@ -287,6 +297,130 @@ def _visualize_training_ground_truth(samples, targets, writer, output_dir,
                 global_step)
         rendered += 1
     return rendered
+
+
+@torch.no_grad()
+def _debug_hungarian_matches(samples, targets, outputs, matcher, writer,
+                             output_dir, epoch, global_step, max_images=2):
+    """Save matched GT/prediction overlays and per-pair cost breakdowns."""
+    main_outputs = {
+        key: value for key, value in outputs.items()
+        if 'aux' not in key and key not in ('dn_outputs', 'dn_pre_outputs')}
+    match_result = matcher(
+        main_outputs, targets, return_diagnostics=True)
+    indices = match_result['indices']
+    diagnostics = match_result['diagnostics']
+    probabilities = (main_outputs['pred_logits'].sigmoid()
+                     if matcher.use_focal_loss else
+                     main_outputs['pred_logits'].softmax(-1))
+
+    root = Path(output_dir or '.') / 'matcher_debug'
+    image_dir = root / f'epoch_{int(epoch):04d}'
+    image_dir.mkdir(parents=True, exist_ok=True)
+    log_path = root / 'matches.jsonl'
+    mean = samples.new_tensor([0.485, 0.456, 0.406])[:, None, None]
+    std = samples.new_tensor([0.229, 0.224, 0.225])[:, None, None]
+
+    records = []
+    for batch_index in range(min(len(samples), max_images)):
+        image_tensor = (
+            samples[batch_index].detach().cpu() * std.detach().cpu()
+            + mean.detach().cpu()).clamp(0, 1)
+        image = Image.fromarray(
+            image_tensor.mul(255).byte().permute(1, 2, 0).numpy())
+        draw = ImageDraw.Draw(image)
+        width, height = image.size
+        pred_indices, target_indices = indices[batch_index]
+        target = targets[batch_index]
+        diag = diagnostics[batch_index]
+
+        for pair_index, (pred_index, target_index) in enumerate(zip(
+                pred_indices.tolist(), target_indices.tolist())):
+            gt_box = target['boxes'][target_index].detach().cpu().tolist()
+            pred_box = main_outputs['pred_boxes'][batch_index, pred_index].detach().cpu().tolist()
+            label = int(target['labels'][target_index])
+            score = float(probabilities[batch_index, pred_index, label].detach().cpu())
+            pose_annotation_valid = bool(target.get(
+                'keypoint_valid', target.get('has_keypoints', torch.ones(
+                    len(target['boxes']), device=target['boxes'].device,
+                    dtype=torch.bool)))[target_index])
+            gt_keypoints = target.get('keypoints')
+            pose_coordinate_valid = bool(
+                pose_annotation_valid and gt_keypoints is not None
+                and (gt_keypoints[target_index, :, 2] > 0).any())
+            component_costs = {
+                name: float(matrix[pred_index, target_index])
+                for name, matrix in diag['components'].items()}
+            target_costs = diag['total_cost'][:, target_index]
+            alternative_queries = torch.argsort(target_costs)[:5].tolist()
+            record = {
+                'step': int(global_step), 'epoch': int(epoch),
+                'batch_index': batch_index,
+                'image_id': int(target['image_id'].item()),
+                'pair_index': pair_index, 'query_index': pred_index,
+                'target_index': target_index, 'label': label,
+                'predicted_label': int(probabilities[batch_index, pred_index].argmax()),
+                'class_score': score,
+                'pose_annotation_valid': pose_annotation_valid,
+                'pose_coordinate_valid': pose_coordinate_valid,
+                'total_cost': float(diag['total_cost'][pred_index, target_index]),
+                'weighted_costs': component_costs,
+                'top_query_alternatives': [
+                    {'query_index': query_index,
+                     'total_cost': float(target_costs[query_index])}
+                    for query_index in alternative_queries],
+                'gt_box_cxcywh': gt_box, 'pred_box_cxcywh': pred_box,
+            }
+            records.append(record)
+
+            for box, color in ((gt_box, (0, 255, 0)), (pred_box, (0, 128, 255))):
+                cx, cy, bw, bh = box
+                xyxy = ((cx - bw / 2) * width, (cy - bh / 2) * height,
+                        (cx + bw / 2) * width, (cy + bh / 2) * height)
+                draw.rectangle(xyxy, outline=color, width=2)
+            gx, gy, _, _ = gt_box
+            draw.text((gx * width, gy * height),
+                      f'GT{target_index}<-Q{pred_index} s={score:.2f} '
+                      f'C={record["total_cost"]:.2f}', fill=(255, 255, 0))
+
+            pred_keypoints = main_outputs.get('pred_keypoints')
+            pred_visibility = main_outputs.get('pred_keypoint_logits')
+            if pose_coordinate_valid and pred_keypoints is not None:
+                gt_kpts = gt_keypoints[target_index].detach().cpu()
+                pred_kpts = pred_keypoints[batch_index, pred_index].detach().cpu()
+                valid_joints = gt_kpts[:, 2] > 0
+                errors = torch.linalg.vector_norm(
+                    pred_kpts[valid_joints] - gt_kpts[valid_joints, :2], dim=-1)
+                record['normalized_keypoint_error_mean'] = float(errors.mean())
+                record['normalized_keypoint_error_max'] = float(errors.max())
+                if pred_visibility is not None:
+                    record['predicted_visibility_mean'] = float(
+                        pred_visibility[batch_index, pred_index].sigmoid().mean())
+                for joint_index, ((gt_x, gt_y, visibility), (pred_x, pred_y)) in enumerate(
+                        zip(gt_kpts.tolist(), pred_kpts.tolist())):
+                    if visibility <= 0:
+                        continue
+                    draw.ellipse((gt_x * width - 3, gt_y * height - 3,
+                                  gt_x * width + 3, gt_y * height + 3),
+                                 fill=(0, 255, 0))
+                    draw.ellipse((pred_x * width - 3, pred_y * height - 3,
+                                  pred_x * width + 3, pred_y * height + 3),
+                                 fill=(255, 64, 64))
+                    draw.line((gt_x * width, gt_y * height,
+                               pred_x * width, pred_y * height),
+                              fill=(255, 255, 0), width=1)
+
+        image_id = int(target['image_id'].item())
+        image.save(image_dir / f'step_{global_step:08d}_image_{image_id}.jpg', quality=95)
+        if writer is not None:
+            writer.add_image(
+                f'Matcher_debug/sample_{batch_index}',
+                torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1),
+                global_step)
+
+    with log_path.open('a', encoding='utf-8') as log_file:
+        for record in records:
+            log_file.write(json.dumps(record) + '\n')
 
 
 @torch.no_grad()

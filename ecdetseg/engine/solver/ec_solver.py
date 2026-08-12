@@ -109,6 +109,8 @@ class ECSolver(BaseSolver):
                     args, 'train_gt_visualization_interval', 0),
                 train_gt_visualization_images=getattr(
                     args, 'train_gt_visualization_images', 1),
+                matcher_debug_interval=getattr(args, 'matcher_debug_interval', 0),
+                matcher_debug_images=getattr(args, 'matcher_debug_images', 2),
             )
 
             if not self.self_lr_scheduler:  # update by epoch 

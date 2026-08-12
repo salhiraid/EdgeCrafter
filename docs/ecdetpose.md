@@ -467,3 +467,21 @@ only classification, bbox L1, and GIoU costs even when
 `keypoint_cost_weight`/`oks_cost_weight` are nonzero. An annotated instance with
 all joints at `v=0` is also excluded from coordinate/OKS matching, while its
 visibility labels can still be supervised by the criterion.
+
+### Inspect Hungarian assignments
+
+Set `matcher_debug_interval` and `matcher_debug_images` at the config root to
+periodically rerun the main-output matcher in diagnostic mode. It writes
+`<output_dir>/matcher_debug/matches.jsonl`, one JSON object per matched pair,
+including image/target/query ids, GT label, predicted label and class score,
+pose-valid flags, total cost, weighted class/bbox/GIoU/keypoint/OKS cost terms,
+normalized GT/pred boxes, five lowest-cost alternative queries, mean/max
+keypoint error, and mean predicted visibility where applicable.
+
+Matched overlays are saved under
+`matcher_debug/epoch_XXXX/step_XXXXXXXX_image_<id>.jpg` and TensorBoard
+`Matcher_debug/sample_N`. Green denotes GT, blue boxes denote matched
+predictions, red points denote matched predictions, green points denote GT, and
+yellow segments show joint error. Bbox-only targets have no pose points and
+must show zero `keypoint`/`oks` weighted costs in JSON. Use a moderate interval
+such as 100 because diagnostic matching adds computation and disk I/O.

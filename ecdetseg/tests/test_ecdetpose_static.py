@@ -366,3 +366,21 @@ def test_visibility_head_depth_is_configurable():
     assert "keypoint_head_hidden_dim=None" in source
     assert "keypoint_visibility_head_layers=1" in source
     assert "final_layer = vis_head.layers[-1]" in source
+
+
+def test_matcher_debug_logs_costs_matches_and_images():
+    matcher_source = (ROOT / "engine" / "edgecrafter" / "matcher.py").read_text(
+        encoding="utf-8")
+    engine_source = (ROOT / "engine" / "solver" / "ec_engine.py").read_text(
+        encoding="utf-8")
+    solver_source = (ROOT / "engine" / "solver" / "ec_solver.py").read_text(
+        encoding="utf-8")
+    assert "return_diagnostics=False" in matcher_source
+    assert "'weighted_components'" not in matcher_source  # implementation variable, not serialized state
+    assert "result['diagnostics']" in matcher_source
+    assert "_debug_hungarian_matches(" in engine_source
+    assert "matches.jsonl" in engine_source
+    assert "top_query_alternatives" in engine_source
+    assert "normalized_keypoint_error_mean" in engine_source
+    assert "Matcher_debug/sample_" in engine_source
+    assert "matcher_debug_interval=getattr" in solver_source
