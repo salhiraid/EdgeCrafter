@@ -446,7 +446,12 @@ class ECCriterion(nn.Module):
                 cached_indices.append(indices_aux)
                 indices_aux_list.append(indices_aux)
             for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
-                indices_enc = self.matcher(aux_outputs, targets)['indices']
+                # Encoder proposals do not pass through the decoder keypoint
+                # heads. Match them with detection costs only; final and
+                # decoder-auxiliary outputs are required to provide
+                # pred_keypoints when pose matcher costs are enabled.
+                indices_enc = self.matcher(
+                    aux_outputs, targets, use_keypoint_costs=False)['indices']
                 cached_indices_enc.append(indices_enc)
                 indices_aux_list.append(indices_enc)
             indices_go = self._get_go_indices(indices, indices_aux_list)

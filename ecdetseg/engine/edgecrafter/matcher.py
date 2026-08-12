@@ -71,7 +71,7 @@ class HungarianMatcher(nn.Module):
 
     @torch.no_grad()
     def forward(self, outputs: Dict[str, torch.Tensor], targets, return_topk=False,
-                return_diagnostics=False):
+                return_diagnostics=False, use_keypoint_costs=True):
         """Performs the matching
 
         Params:
@@ -148,8 +148,31 @@ class HungarianMatcher(nn.Module):
 
         cost_keypoint = None
         cost_oks = None
-        if (self.cost_keypoint or self.cost_oks) and 'pred_keypoints' in outputs and all('keypoints' in v for v in targets):
+        pose_costs_configured = bool(self.cost_keypoint or self.cost_oks)
+        if use_keypoint_costs and pose_costs_configured:
+            if 'pred_keypoints' not in outputs:
+                raise KeyError(
+                    'HungarianMatcher has non-zero keypoint/OKS costs, but '
+                    "outputs does not contain 'pred_keypoints'. The final and "
+                    'decoder-auxiliary predictions must pass the keypoint head '
+                    'output to the matcher. Only encoder-only matching may set '
+                    'use_keypoint_costs=False.')
+            missing_targets = [
+                index for index, target in enumerate(targets)
+                if 'keypoints' not in target
+            ]
+            if missing_targets:
+                raise KeyError(
+                    'HungarianMatcher has non-zero keypoint/OKS costs, but '
+                    f"targets {missing_targets} do not contain 'keypoints'. "
+                    'BBox-only instances must still have zero-filled keypoints '
+                    'and keypoint_valid=False so instance rows remain aligned.')
+
             out_keypoints = outputs['pred_keypoints'].flatten(0, 1)
+            if out_keypoints.ndim != 3 or out_keypoints.shape[-1] != 2:
+                raise ValueError(
+                    "outputs['pred_keypoints'] must have shape [B, Q, K, 2], "
+                    f'got {tuple(outputs["pred_keypoints"].shape)}')
             tgt_keypoints = torch.cat([v['keypoints'] for v in targets]).to(out_keypoints.device)
             if tgt_keypoints.numel() > 0:
                 instance_valid = torch.cat([
@@ -284,6 +307,9 @@ class HungarianMatcher(nn.Module):
                         name: batches[batch_index][batch_index].detach()
                         for name, batches in component_batches.items()
                     },
+                    'pose_costs_configured': pose_costs_configured,
+                    'pose_costs_used': bool(
+                        use_keypoint_costs and pose_costs_configured),
                 }
                 for batch_index, cost_batch in enumerate(C.split(sizes, -1))
             ]

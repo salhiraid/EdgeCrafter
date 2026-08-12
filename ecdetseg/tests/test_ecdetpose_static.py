@@ -270,6 +270,17 @@ def test_matcher_does_not_evaluate_bbox_only_pose_columns():
     assert "bool(obj.get(\"keypoints\"))" in dataset_source
 
 
+def test_matcher_requires_pose_predictions_when_pose_costs_are_enabled():
+    matcher_source = (ROOT / "engine" / "edgecrafter" / "matcher.py").read_text(
+        encoding="utf-8")
+    criterion_source = (ROOT / "engine" / "edgecrafter" / "criterion.py").read_text(
+        encoding="utf-8")
+    assert "if 'pred_keypoints' not in outputs:" in matcher_source
+    assert "outputs does not contain 'pred_keypoints'" in matcher_source
+    assert "'pose_costs_used'" in matcher_source
+    assert "use_keypoint_costs=False" in criterion_source
+
+
 def test_legacy_sanitizer_and_mixup_keep_pose_fields_aligned():
     transforms_source = (
         ROOT / "engine" / "data" / "transforms" / "_transforms.py"
