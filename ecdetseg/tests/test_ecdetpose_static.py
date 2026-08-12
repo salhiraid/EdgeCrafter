@@ -279,6 +279,8 @@ def test_matcher_requires_pose_predictions_when_pose_costs_are_enabled():
     assert "outputs does not contain 'pred_keypoints'" in matcher_source
     assert "'pose_costs_used'" in matcher_source
     assert "use_keypoint_costs=False" in criterion_source
+    assert "for i, aux_outputs in enumerate(outputs['aux_outputs']):" in criterion_source
+    assert "outputs['pre_outputs'], targets," in criterion_source
 
 
 def test_legacy_sanitizer_and_mixup_keep_pose_fields_aligned():

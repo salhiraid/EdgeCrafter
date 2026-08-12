@@ -438,13 +438,22 @@ class ECCriterion(nn.Module):
         # Get the matching union set across all decoder layers.
         if 'aux_outputs' in outputs:
             indices_aux_list, cached_indices, cached_indices_enc = [], [], []
-            aux_outputs_list = outputs['aux_outputs']
-            if 'pre_outputs' in outputs:
-                aux_outputs_list = outputs['aux_outputs'] + [outputs['pre_outputs']]
-            for i, aux_outputs in enumerate(aux_outputs_list):
+            # Decoder auxiliary layers have passed through the keypoint heads,
+            # so pose-aware matching is required for every one of them.
+            for i, aux_outputs in enumerate(outputs['aux_outputs']):
                 indices_aux = self.matcher(aux_outputs, targets)['indices']
                 cached_indices.append(indices_aux)
                 indices_aux_list.append(indices_aux)
+            if 'pre_outputs' in outputs:
+                # pre_outputs is the traditional detection head produced
+                # before decoder keypoint prediction. It intentionally has no
+                # pred_keypoints and must use detection-only matching, just as
+                # its keypoint loss is skipped below.
+                indices_pre = self.matcher(
+                    outputs['pre_outputs'], targets,
+                    use_keypoint_costs=False)['indices']
+                cached_indices.append(indices_pre)
+                indices_aux_list.append(indices_pre)
             for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
                 # Encoder proposals do not pass through the decoder keypoint
                 # heads. Match them with detection costs only; final and
