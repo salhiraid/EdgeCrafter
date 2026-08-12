@@ -263,21 +263,40 @@ class ECCriterion(nn.Module):
                 f"target keypoints has K={tgt_keypoints.shape[-2]}, expected num_keypoints={self.num_keypoints}"
             )
 
-        valid = tgt_keypoints[..., 2] > 0
+        # A zero-filled keypoint tensor keeps bbox/keypoint instance counts aligned
+        # through Mosaic and other transforms.  ``keypoint_valid`` distinguishes
+        # those placeholders from genuinely annotated instances.  Do not infer
+        # this from visibility: an annotated instance may legitimately have all
+        # keypoints marked v=0.
+        instance_valid_parts = []
+        for t, (_, target_idx) in zip(targets, indices):
+            if len(target_idx) == 0:
+                continue
+            instance_mask = t.get('keypoint_valid', t.get('has_keypoints'))
+            if instance_mask is None:
+                instance_mask = torch.ones(len(t['boxes']), dtype=torch.bool, device=t['boxes'].device)
+            instance_valid_parts.append(instance_mask[target_idx])
+        instance_valid = torch.cat(instance_valid_parts, dim=0).to(device=device, dtype=torch.bool)
+
+        coordinate_valid = (tgt_keypoints[..., 2] > 0) & instance_valid[:, None]
         visible = tgt_keypoints[..., 2] > 1
-        valid_count = valid.sum().clamp(min=1).to(src_keypoints.dtype)
+        coordinate_count = coordinate_valid.sum().clamp(min=1).to(src_keypoints.dtype)
 
         coord_loss = F.smooth_l1_loss(src_keypoints, tgt_keypoints[..., :2], reduction='none')
-        coord_loss = (coord_loss.sum(-1) * valid.to(coord_loss.dtype)).sum() / valid_count
+        coord_loss = (coord_loss.sum(-1) * coordinate_valid.to(coord_loss.dtype)).sum() / coordinate_count
 
+        # Visibility is supervised for every joint of annotated instances,
+        # including v=0 joints.  Placeholder instances contribute no loss.
+        visibility_valid = instance_valid[:, None].expand_as(visible)
+        visibility_count = visibility_valid.sum().clamp(min=1).to(src_vis_logits.dtype)
         target_vis = visible.to(src_vis_logits.dtype)
         vis_loss = F.binary_cross_entropy_with_logits(src_vis_logits, target_vis, reduction='none')
-        vis_loss = (vis_loss * valid.to(vis_loss.dtype)).sum() / valid_count
+        vis_loss = (vis_loss * visibility_valid.to(vis_loss.dtype)).sum() / visibility_count
 
-        oks = self._oks(src_keypoints, tgt_keypoints[..., :2], valid, tgt_area)
-        instance_valid = valid.any(dim=1)
-        if instance_valid.any():
-            oks_loss = (1.0 - oks[instance_valid]).sum() / instance_valid.sum().clamp(min=1).to(src_keypoints.dtype)
+        oks = self._oks(src_keypoints, tgt_keypoints[..., :2], coordinate_valid, tgt_area)
+        oks_instance_valid = coordinate_valid.any(dim=1)
+        if oks_instance_valid.any():
+            oks_loss = (1.0 - oks[oks_instance_valid]).sum() / oks_instance_valid.sum().clamp(min=1).to(src_keypoints.dtype)
         else:
             oks_loss = src_keypoints.sum() * 0.0
 
@@ -427,7 +446,12 @@ class ECCriterion(nn.Module):
                 cached_indices.append(indices_aux)
                 indices_aux_list.append(indices_aux)
             for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
-                indices_enc = self.matcher(aux_outputs, targets)['indices']
+                # Encoder proposals do not pass through the decoder keypoint
+                # heads. Match them with detection costs only; final and
+                # decoder-auxiliary outputs are required to provide
+                # pred_keypoints when pose matcher costs are enabled.
+                indices_enc = self.matcher(
+                    aux_outputs, targets, use_keypoint_costs=False)['indices']
                 cached_indices_enc.append(indices_enc)
                 indices_aux_list.append(indices_enc)
             indices_go = self._get_go_indices(indices, indices_aux_list)

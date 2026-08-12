@@ -130,6 +130,11 @@ class YAMLConfig(BaseConfig):
         for pg in cfg['params']:
             pattern = pg['params']
             params = {k: v for k, v in model.named_parameters() if v.requires_grad and len(re.findall(pattern, k)) > 0}
+            duplicated = sorted(set(params).intersection(visited))
+            if duplicated:
+                raise ValueError(
+                    f'Optimizer parameter regex {pattern!r} overlaps a previous '
+                    f'group for parameters: {duplicated[:10]}')
             pg['params'] = params.values()
             param_groups.append(pg)
             visited.extend(list(params.keys()))
