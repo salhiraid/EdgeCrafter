@@ -33,6 +33,10 @@ ECCriterion:
   }
   losses: ['mal', 'boxes', 'local', 'keypoints']
   num_keypoints: 31
+  # Normalized coordinates need L1 (or a small-beta Smooth-L1). The PyTorch
+  # Smooth-L1 default beta=1 makes pose loss and gradients artificially tiny.
+  keypoint_coordinate_loss: l1
+  keypoint_smooth_l1_beta: 0.05
   keypoint_oks_sigmas: [
     0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,
     0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,
@@ -53,7 +57,9 @@ train_dataloader:
         - {type: RandomPhotometricDistort, p: 0.5}
         - {type: ResizeWithKeypoints, size: [640, 640]}
         - {type: RandomHorizontalFlipWithKeypoints, p: 0.5, keypoint_flip_pairs: [], allow_without_flip_pairs: false}
-        - {type: SanitizeBoundingBoxes, min_size: 1}
+        # Keep pose fields aligned when invalid boxes are removed. The generic
+        # torchvision sanitizer only knows about boxes and labels.
+        - {type: KeypointSanitizeBoundingBoxes, min_size: 1}
         - {type: ConvertPILImage, dtype: 'float32', scale: true}
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertKeypoints, normalize: true}
