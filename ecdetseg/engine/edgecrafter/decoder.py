@@ -187,11 +187,15 @@ class MSDeformableAttention(nn.Module):
         attention_weights = self.attention_weights(query).reshape(bs, Len_q, self.num_heads, sum(self.num_points_list))
         attention_weights = F.softmax(attention_weights, dim=-1)
 
-        if reference_points.shape[-1] == 2:
+        # ECDet deploy always supplies 4-D box reference points. Select that
+        # architecture-static path explicitly while tracing so ONNX does not
+        # record a Tensor-shape-to-Python-boolean branch.
+        reference_dim = 4 if torch.jit.is_tracing() else reference_points.shape[-1]
+        if reference_dim == 2:
             offset_normalizer = torch.tensor(value_spatial_shapes)
             offset_normalizer = offset_normalizer.flip([1]).reshape(1, 1, 1, self.num_levels, 1, 2)
             sampling_locations = reference_points.reshape(bs, Len_q, 1, self.num_levels, 1, 2) + sampling_offsets / offset_normalizer
-        elif reference_points.shape[-1] == 4:
+        elif reference_dim == 4:
             # reference_points [8, 480, None, 1,  4]
             # sampling_offsets [8, 480, 8,    12, 2]
             num_points_scale = self.num_points_scale.to(dtype=query.dtype).unsqueeze(-1)
@@ -452,6 +456,8 @@ class ECTransformer(nn.Module):
                  num_keypoints=0,
                  constrain_keypoints_to_box=True,
                  keypoint_head_layers=3,
+                 keypoint_head_hidden_dim=None,
+                 keypoint_visibility_head_layers=1,
                  ):
         super().__init__()
         assert len(feat_channels) <= num_levels
@@ -474,6 +480,8 @@ class ECTransformer(nn.Module):
         self.reg_max = reg_max
         self.num_keypoints = int(num_keypoints or 0)
         self.constrain_keypoints_to_box = constrain_keypoints_to_box
+        self.keypoint_head_hidden_dim = int(
+            keypoint_head_hidden_dim or hidden_dim)
 
         assert query_select_method in ('default', 'one2many', 'agnostic'), ''
         assert cross_attn_method in ('default', 'discrete'), ''
@@ -534,15 +542,26 @@ class ECTransformer(nn.Module):
           + [MLP(scaled_dim, scaled_dim, 4 * (self.reg_max+1), 3, act=activation) for _ in range(num_layers - self.eval_idx - 1)])
 
         if self.num_keypoints > 0:
-            keypoint_xy_head = MLP(hidden_dim, hidden_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
-            keypoint_vis_head = nn.Linear(hidden_dim, self.num_keypoints)
+            keypoint_xy_head = MLP(
+                hidden_dim, self.keypoint_head_hidden_dim,
+                self.num_keypoints * 2, keypoint_head_layers, act=activation)
+            keypoint_vis_head = (
+                nn.Linear(hidden_dim, self.num_keypoints)
+                if keypoint_visibility_head_layers == 1 else MLP(
+                    hidden_dim, self.keypoint_head_hidden_dim,
+                    self.num_keypoints, keypoint_visibility_head_layers,
+                    act=activation))
             self.dec_keypoint_xy_head = nn.ModuleList(
                 [keypoint_xy_head if share_bbox_head else copy.deepcopy(keypoint_xy_head) for _ in range(self.eval_idx + 1)]
-              + [MLP(scaled_dim, scaled_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
+              + [MLP(scaled_dim, self.keypoint_head_hidden_dim, self.num_keypoints * 2, keypoint_head_layers, act=activation)
                  for _ in range(num_layers - self.eval_idx - 1)])
             self.dec_keypoint_vis_head = nn.ModuleList(
                 [keypoint_vis_head if share_score_head else copy.deepcopy(keypoint_vis_head) for _ in range(self.eval_idx + 1)]
-              + [nn.Linear(scaled_dim, self.num_keypoints) for _ in range(num_layers - self.eval_idx - 1)])
+              + [(nn.Linear(scaled_dim, self.num_keypoints)
+                  if keypoint_visibility_head_layers == 1 else MLP(
+                     scaled_dim, self.keypoint_head_hidden_dim, self.num_keypoints,
+                     keypoint_visibility_head_layers, act=activation))
+                 for _ in range(num_layers - self.eval_idx - 1)])
 
         # init encoder output anchors and valid_mask
         if self.eval_spatial_size:
@@ -584,8 +603,9 @@ class ECTransformer(nn.Module):
                     init.constant_(xy_head.layers[-1].bias, 0)
             vis_bias = bias_init_with_prob(0.01)
             for vis_head in self.dec_keypoint_vis_head:
-                init.constant_(vis_head.weight, 0)
-                init.constant_(vis_head.bias, vis_bias)
+                final_layer = vis_head.layers[-1] if hasattr(vis_head, 'layers') else vis_head
+                init.constant_(final_layer.weight, 0)
+                init.constant_(final_layer.bias, vis_bias)
 
         if self.learn_query_content:
             init.xavier_uniform_(self.tgt_embed.weight)
@@ -688,8 +708,10 @@ class ECTransformer(nn.Module):
         else:
             anchors = self.anchors
             valid_mask = self.valid_mask
-        if memory.shape[0] > 1:
-            anchors = anchors.repeat(memory.shape[0], 1, 1)
+        # ``anchors`` has a singleton batch dimension. Expanding it works for
+        # both batch=1 and larger dynamic batches and avoids tracing a Python
+        # conditional from a tensor shape.
+        anchors = anchors.expand(memory.shape[0], -1, -1)
 
         # memory = torch.where(valid_mask, memory, 0)
         memory = valid_mask.to(memory.dtype) * memory
@@ -843,7 +865,10 @@ class ECTransformer(nn.Module):
     def _predict_keypoints(self, decoder_features, boxes):
         keypoints = []
         keypoint_logits = []
-        for i, hs in enumerate(decoder_features):
+        # The number of decoder heads is architecture-static. Indexing by that
+        # static count avoids iterating over a Tensor during ONNX tracing.
+        for i in range(len(self.dec_keypoint_xy_head)):
+            hs = decoder_features[i]
             raw_xy = self.dec_keypoint_xy_head[i](hs).reshape(hs.shape[0], hs.shape[1], self.num_keypoints, 2)
             keypoint_logits.append(self.dec_keypoint_vis_head[i](hs))
             if self.constrain_keypoints_to_box:

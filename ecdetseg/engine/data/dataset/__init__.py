@@ -3,7 +3,7 @@ Copied from RT-DETR (https://github.com/lyuwenyu/RT-DETR)
 Copyright(c) 2023 lyuwenyu. All Rights Reserved.
 """
 
-# from ._dataset import DetDataset
+from ._dataset import DetDataset, WeightedMultiDataset
 from .coco_dataset import (CocoDetection, mscoco_category2label,
                            mscoco_category2name, mscoco_label2category)
 from .coco_eval import CocoEvaluator
