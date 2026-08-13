@@ -11,6 +11,7 @@ Copyright (c) 2023 lyuwenyu. All Rights Reserved.
 
 import os
 import sys
+import inspect
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../..'))
 
@@ -133,6 +134,14 @@ def main(args, ):
             f'Unsupported deploy output count: {len(exported_outputs)}. '
             'Expected 3 (detection), 4 (segmentation), or 5 (pose).')
     
+    export_kwargs = {}
+    if 'dynamo' in inspect.signature(torch.onnx.export).parameters:
+        export_kwargs['dynamo'] = args.dynamo
+    elif args.dynamo:
+        raise RuntimeError(
+            '--dynamo is not supported by this PyTorch version. Upgrade '
+            'PyTorch or omit the option to use the TorchScript exporter.')
+
     torch.onnx.export(
         model,
         (data, size),
@@ -143,6 +152,10 @@ def main(args, ):
         opset_version=args.opset,
         verbose=False,
         do_constant_folding=True,
+        # The legacy TorchScript exporter is the stable default for this
+        # model. Recent Dynamo exporters can fail to decompose real-valued
+        # aten.mul.Scalar nodes produced by third-party/model internals.
+        **export_kwargs,
     )
 
     if args.check:
@@ -174,5 +187,8 @@ if __name__ == '__main__':
         help='Model class count. With --resume it is inferred from the checkpoint and this option only validates it.')
     parser.add_argument('--check',  action='store_true')
     parser.add_argument('--simplify',  action='store_true')
+    parser.add_argument(
+        '--dynamo', action='store_true',
+        help='Use the experimental torch.export/Dynamo ONNX path. The default uses the more compatible TorchScript exporter.')
     args = parser.parse_args()
     main(args)

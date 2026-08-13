@@ -440,3 +440,6 @@ def test_onnx_export_names_pose_outputs_and_uses_width_height_order():
     assert 'checkpoint_num_classes = _infer_num_classes(state)' in exporter
     assert "cfg_kwargs['num_classes'] = num_classes" in exporter
     assert "'decoder.enc_score_head.weight'" in exporter
+    assert "export_kwargs['dynamo'] = args.dynamo" in exporter
+    assert "half = layer_boxes.new_tensor(0.5)" in decoder
+    assert "0.5 * layer_boxes[..., 2:]" not in decoder

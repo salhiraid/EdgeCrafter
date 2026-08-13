@@ -588,3 +588,11 @@ index. During evaluation and ONNX export, the decoder returns only the selected
 both an out-of-bounds access (one returned feature versus several configured
 heads) and the incorrect use of layer-zero pose weights for the final decoder
 prediction.
+
+The exporter uses PyTorch's legacy TorchScript ONNX path by default. This is
+intentional: some PyTorch releases fail in the newer Dynamo exporter with
+`No ONNX function found for aten.mul.Scalar` on real-valued scalar constants.
+The bbox-relative pose decoder also represents its `0.5` factor as a tensor
+constant, which is portable across both exporters. Use `--dynamo` only when the
+installed PyTorch/ONNX stack supports the entire graph; it is not required for
+a valid pose export.

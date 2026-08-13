@@ -884,7 +884,11 @@ class ECTransformer(nn.Module):
             if self.constrain_keypoints_to_box:
                 rel_xy = raw_xy.sigmoid()
                 layer_boxes = boxes[feature_index]
-                xy_min = layer_boxes[..., :2] - 0.5 * layer_boxes[..., 2:]
+                # Use a tensor constant rather than Python's real-valued 0.5.
+                # Some PyTorch Dynamo ONNX versions cannot lower
+                # aten.mul.Scalar when the scalar input is a real number.
+                half = layer_boxes.new_tensor(0.5)
+                xy_min = layer_boxes[..., :2] - layer_boxes[..., 2:] * half
                 wh = layer_boxes[..., 2:].clamp(min=1e-6)
                 xy = xy_min.unsqueeze(-2) + rel_xy * wh.unsqueeze(-2)
             else:
