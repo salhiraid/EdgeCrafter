@@ -433,7 +433,9 @@ def test_onnx_export_names_pose_outputs_and_uses_width_height_order():
     assert "output_names.extend(['keypoints', 'keypoint_scores'])" in exporter
     assert "len(exported_outputs) == 5" in exporter
     assert 'anchors = anchors.expand(memory.shape[0], -1, -1)' in decoder
-    assert 'for i in range(len(self.dec_keypoint_xy_head))' in decoder
+    assert 'feature_head_indices = (self.eval_idx, )' in decoder
+    assert 'hs = decoder_features[feature_index]' in decoder
+    assert 'self.dec_keypoint_xy_head[head_index](hs)' in decoder
     assert 'resize_H = int(H_c * scale)' not in backbone
     assert 'checkpoint_num_classes = _infer_num_classes(state)' in exporter
     assert "cfg_kwargs['num_classes'] = num_classes" in exporter

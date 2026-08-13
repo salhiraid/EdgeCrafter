@@ -580,3 +580,11 @@ export failure; `--check` validates the resulting graph. The exporter avoids
 Tensor-to-Python conversions in its multiscale feature sizing, dynamic-batch
 anchor expansion, and pose-head loop so these warnings are not emitted by those
 paths.
+
+During training, every decoder layer uses the pose head with the same layer
+index. During evaluation and ONNX export, the decoder returns only the selected
+`eval_idx` feature tensor, so pose inference explicitly applies the
+`eval_idx` coordinate and visibility heads to that single tensor. This avoids
+both an out-of-bounds access (one returned feature versus several configured
+heads) and the incorrect use of layer-zero pose weights for the final decoder
+prediction.

@@ -865,16 +865,27 @@ class ECTransformer(nn.Module):
     def _predict_keypoints(self, decoder_features, boxes):
         keypoints = []
         keypoint_logits = []
-        # The number of decoder heads is architecture-static. Indexing by that
-        # static count avoids iterating over a Tensor during ONNX tracing.
-        for i in range(len(self.dec_keypoint_xy_head)):
-            hs = decoder_features[i]
-            raw_xy = self.dec_keypoint_xy_head[i](hs).reshape(hs.shape[0], hs.shape[1], self.num_keypoints, 2)
-            keypoint_logits.append(self.dec_keypoint_vis_head[i](hs))
+        if self.training:
+            # Training returns one feature tensor per decoder layer, so each
+            # layer must use its corresponding pose head for auxiliary losses.
+            feature_head_indices = range(len(self.dec_keypoint_xy_head))
+        else:
+            # In evaluation/deploy mode TransformerDecoder returns only the
+            # selected eval layer (a tensor with leading dimension 1). It must
+            # use that layer's pose head, not iterate over every configured
+            # head and not fall back to head zero.
+            feature_head_indices = (self.eval_idx, )
+
+        for feature_index, head_index in enumerate(feature_head_indices):
+            hs = decoder_features[feature_index]
+            raw_xy = self.dec_keypoint_xy_head[head_index](hs).reshape(
+                hs.shape[0], hs.shape[1], self.num_keypoints, 2)
+            keypoint_logits.append(self.dec_keypoint_vis_head[head_index](hs))
             if self.constrain_keypoints_to_box:
                 rel_xy = raw_xy.sigmoid()
-                xy_min = boxes[i][..., :2] - 0.5 * boxes[i][..., 2:]
-                wh = boxes[i][..., 2:].clamp(min=1e-6)
+                layer_boxes = boxes[feature_index]
+                xy_min = layer_boxes[..., :2] - 0.5 * layer_boxes[..., 2:]
+                wh = layer_boxes[..., 2:].clamp(min=1e-6)
                 xy = xy_min.unsqueeze(-2) + rel_xy * wh.unsqueeze(-2)
             else:
                 xy = raw_xy.sigmoid()
