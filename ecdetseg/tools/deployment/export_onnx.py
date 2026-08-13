@@ -57,8 +57,12 @@ def main(args, ):
 
     img_size = cfg.yaml_cfg["eval_spatial_size"]
     data = torch.rand(1, 3, *img_size)
-    size = torch.tensor([img_size])
-    _ = model(data, size)
+    # eval_spatial_size is [height, width], while the postprocessor contract is
+    # [width, height]. This matters for non-square pose exports because boxes
+    # and keypoints must use the correct independent x/y scales.
+    size = torch.tensor([[img_size[1], img_size[0]]], dtype=torch.float32)
+    with torch.no_grad():
+        exported_outputs = model(data, size)
 
     dynamic_axes = {
         'images': {0: 'N', },
@@ -66,7 +70,17 @@ def main(args, ):
     }
 
     output_file = args.resume.replace('.pth', '.onnx') if args.resume else 'model.onnx'
-    output_names = ['labels', 'boxes', 'scores'] + (['masks'] if task == 'segmentation' else [])
+    output_names = ['labels', 'boxes', 'scores']
+    if task == 'segmentation':
+        output_names.append('masks')
+    elif len(exported_outputs) == 5:
+        # ECDetPose deploy output: labels, boxes, scores, keypoints and
+        # per-keypoint visibility/confidence scores.
+        output_names.extend(['keypoints', 'keypoint_scores'])
+    elif len(exported_outputs) != 3:
+        raise RuntimeError(
+            f'Unsupported deploy output count: {len(exported_outputs)}. '
+            'Expected 3 (detection), 4 (segmentation), or 5 (pose).')
     
     torch.onnx.export(
         model,

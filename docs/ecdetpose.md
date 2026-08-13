@@ -543,3 +543,31 @@ vehicle_val_predictions/
 all detections per image. The two `coco_*` files can be passed directly to COCO
 evaluation. Add `--no-images` for JSON-only inference, `--max-images 100` for a
 short run, or `--start-index 0 --filename-digits 6` to produce `000000.jpg`.
+
+## Export ECDetPose to ONNX
+
+Export a pose checkpoint with:
+
+```bash
+python ecdetseg/tools/deployment/export_onnx.py \
+  --config ecdetseg/configs/ecdetpose/examples/ecdetpose_m_vehicle_31kpts.yml \
+  --resume /path/to/best.pth \
+  --opset 18 \
+  --check
+```
+
+An ECDetPose graph has five named outputs: `labels`, `boxes`, `scores`,
+`keypoints`, and `keypoint_scores`. `orig_target_sizes` uses `[width, height]`,
+whereas `eval_spatial_size` uses `[height, width]`; the exporter performs this
+conversion explicitly so non-square exports scale bbox X/Y and keypoint X/Y
+correctly.
+
+The exported graph supports a dynamic batch dimension. Its spatial resolution
+is intentionally fixed to `eval_spatial_size`, because the backbone and decoder
+precompute resolution-dependent feature shapes and anchors in deploy mode. Use
+a separate export for each required inference resolution. Shape-related
+`TracerWarning` messages from architecture-static branches do not indicate an
+export failure; `--check` validates the resulting graph. The exporter avoids
+Tensor-to-Python conversions in its multiscale feature sizing, dynamic-batch
+anchor expansion, and pose-head loop so these warnings are not emitted by those
+paths.

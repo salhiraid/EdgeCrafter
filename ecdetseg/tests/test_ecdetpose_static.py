@@ -423,3 +423,15 @@ def test_dataset_inference_exports_original_coordinates_and_sequential_images():
     assert 'f"{output_index:0{args.filename_digits}d}.jpg"' in source
     assert 'coco_bbox_predictions.json' in source
     assert 'coco_keypoint_predictions.json' in source
+
+
+def test_onnx_export_names_pose_outputs_and_uses_width_height_order():
+    exporter = (ROOT / 'tools/deployment/export_onnx.py').read_text()
+    decoder = (ROOT / 'engine/edgecrafter/decoder.py').read_text()
+    backbone = (ROOT / 'engine/edgecrafter/ecvit.py').read_text()
+    assert "size = torch.tensor([[img_size[1], img_size[0]]]" in exporter
+    assert "output_names.extend(['keypoints', 'keypoint_scores'])" in exporter
+    assert "len(exported_outputs) == 5" in exporter
+    assert 'anchors = anchors.expand(memory.shape[0], -1, -1)' in decoder
+    assert 'for i in range(len(self.dec_keypoint_xy_head))' in decoder
+    assert 'resize_H = int(H_c * scale)' not in backbone
