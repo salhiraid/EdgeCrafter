@@ -414,3 +414,12 @@ def test_matcher_debug_logs_costs_matches_and_images():
     assert "normalized_keypoint_error_mean" in engine_source
     assert "Matcher_debug/sample_" in engine_source
     assert "matcher_debug_interval=getattr" in solver_source
+def test_dataset_inference_exports_original_coordinates_and_sequential_images():
+    source = (ROOT / 'tools/inference/ecdetpose_dataset.py').read_text()
+    assert '--visualization-resolution' in source
+    assert 'choices=("original", "inference")' in source
+    assert 'original_result = postprocessor(outputs, original_size)[0]' in source
+    assert 'visualization_result = postprocessor(outputs, inference_target)[0]' in source
+    assert 'f"{output_index:0{args.filename_digits}d}.jpg"' in source
+    assert 'coco_bbox_predictions.json' in source
+    assert 'coco_keypoint_predictions.json' in source

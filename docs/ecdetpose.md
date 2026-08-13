@@ -485,3 +485,61 @@ predictions, red points denote matched predictions, green points denote GT, and
 yellow segments show joint error. Bbox-only targets have no pose points and
 must show zero `keypoint`/`oks` weighted costs in JSON. Use a moderate interval
 such as 100 because diagnostic matching adds computation and disk I/O.
+## Dataset inference and sequential prediction images
+
+Use `ecdetpose_dataset.py` to run a checkpoint over the exact image list and
+image ids in a COCO annotation file. It writes combined results, COCO bbox and
+keypoint result files, and optionally prediction overlays named `00001.jpg`,
+`00002.jpg`, and so on:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python ecdetseg/tools/inference/ecdetpose_dataset.py \
+  --config ecdetseg/configs/ecdetpose/examples/ecdetpose_m_vehicle_31kpts.yml \
+  --checkpoint /path/to/best.pth \
+  --ann-file /data/vehicle/annotations/val.json \
+  --image-root /data/vehicle/images \
+  --save-dir outputs/vehicle_val_predictions \
+  --inference-size 960x960 \
+  --visualization-resolution original \
+  --score-threshold 0.3 \
+  --keypoint-threshold 0.5 \
+  --category-ids 1,2,3,4,5 \
+  --show-labels \
+  --show-keypoint-indices \
+  --amp
+```
+
+`--inference-size` is `HEIGHTxWIDTH`. If it is omitted, the script uses the
+configuration's `eval_spatial_size`. `--visualization-resolution original`
+draws on the source image at its original dimensions. Use
+`--visualization-resolution inference` to save the resized model input instead.
+
+The model predicts normalized boxes and keypoints. The postprocessor scales X
+by the selected output width and Y by the selected output height. Consequently,
+even when inference resizing changes the aspect ratio, JSON coordinates are
+always converted back to the original-image coordinate system; inference-size
+overlays use a second, independent projection onto the resized image. Boxes and
+keypoints therefore remain aligned in both output modes.
+
+The `--category-ids` values must be COCO category ids in model-label order. For
+example, label `0` maps to the first id, label `1` to the second id, and so on.
+If omitted, category order from the annotation JSON is used.
+
+The output directory contains:
+
+```text
+vehicle_val_predictions/
+├── images/
+│   ├── 00001.jpg
+│   ├── 00002.jpg
+│   └── ...
+├── predictions.json
+├── coco_bbox_predictions.json
+├── coco_keypoint_predictions.json
+└── summary.json
+```
+
+`predictions.json` retains the source file name, original/inference sizes, and
+all detections per image. The two `coco_*` files can be passed directly to COCO
+evaluation. Add `--no-images` for JSON-only inference, `--max-images 100` for a
+short run, or `--start-index 0 --filename-digits 6` to produce `000000.jpg`.
