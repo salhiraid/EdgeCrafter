@@ -49,6 +49,8 @@ class ECCriterion(nn.Module):
         mask_point_sample_ratio=None,
         num_keypoints=0,
         keypoint_oks_sigmas=None,
+        keypoint_coordinate_loss='l1',
+        keypoint_smooth_l1_beta=0.05,
         ):
         super().__init__()
         self.num_classes = num_classes
@@ -68,6 +70,14 @@ class ECCriterion(nn.Module):
         self.mask_point_sample_ratio = matcher.mask_point_sample_ratio
         self.num_keypoints = int(num_keypoints or 0)
         self.keypoint_oks_sigmas = keypoint_oks_sigmas
+        self.keypoint_coordinate_loss = keypoint_coordinate_loss.lower()
+        self.keypoint_smooth_l1_beta = float(keypoint_smooth_l1_beta)
+        if self.keypoint_coordinate_loss not in ('l1', 'smooth_l1'):
+            raise ValueError(
+                "keypoint_coordinate_loss must be 'l1' or 'smooth_l1', got "
+                f'{keypoint_coordinate_loss!r}')
+        if self.keypoint_smooth_l1_beta <= 0:
+            raise ValueError('keypoint_smooth_l1_beta must be greater than zero')
         if self.num_keypoints > 0 and keypoint_oks_sigmas is not None and len(keypoint_oks_sigmas) != self.num_keypoints:
             raise ValueError(
                 f"keypoint_oks_sigmas length ({len(keypoint_oks_sigmas)}) must match num_keypoints ({self.num_keypoints})"
@@ -263,21 +273,52 @@ class ECCriterion(nn.Module):
                 f"target keypoints has K={tgt_keypoints.shape[-2]}, expected num_keypoints={self.num_keypoints}"
             )
 
-        valid = tgt_keypoints[..., 2] > 0
+        # A zero-filled keypoint tensor keeps bbox/keypoint instance counts aligned
+        # through Mosaic and other transforms.  ``keypoint_valid`` distinguishes
+        # those placeholders from genuinely annotated instances.  Do not infer
+        # this from visibility: an annotated instance may legitimately have all
+        # keypoints marked v=0.
+        instance_valid_parts = []
+        for t, (_, target_idx) in zip(targets, indices):
+            if len(target_idx) == 0:
+                continue
+            instance_mask = t.get('keypoint_valid', t.get('has_keypoints'))
+            if instance_mask is None:
+                instance_mask = torch.ones(len(t['boxes']), dtype=torch.bool, device=t['boxes'].device)
+            instance_valid_parts.append(instance_mask[target_idx])
+        instance_valid = torch.cat(instance_valid_parts, dim=0).to(device=device, dtype=torch.bool)
+
+        coordinate_valid = (tgt_keypoints[..., 2] > 0) & instance_valid[:, None]
         visible = tgt_keypoints[..., 2] > 1
-        valid_count = valid.sum().clamp(min=1).to(src_keypoints.dtype)
+        coordinate_count = coordinate_valid.sum().clamp(min=1).to(src_keypoints.dtype)
 
-        coord_loss = F.smooth_l1_loss(src_keypoints, tgt_keypoints[..., :2], reduction='none')
-        coord_loss = (coord_loss.sum(-1) * valid.to(coord_loss.dtype)).sum() / valid_count
+        # Coordinates are normalized to [0, 1]. PyTorch's default Smooth-L1
+        # beta=1 therefore puts virtually every error in the quadratic branch,
+        # producing deceptively small values and gradients (for example a
+        # 0.1 coordinate error contributes only 0.005). L1 is the default for
+        # pose localization and matches the Hungarian coordinate cost. A
+        # small-beta Smooth-L1 remains available explicitly for noisy labels.
+        if self.keypoint_coordinate_loss == 'l1':
+            coord_loss = F.l1_loss(
+                src_keypoints, tgt_keypoints[..., :2], reduction='none')
+        else:
+            coord_loss = F.smooth_l1_loss(
+                src_keypoints, tgt_keypoints[..., :2], reduction='none',
+                beta=self.keypoint_smooth_l1_beta)
+        coord_loss = (coord_loss.sum(-1) * coordinate_valid.to(coord_loss.dtype)).sum() / coordinate_count
 
+        # Visibility is supervised for every joint of annotated instances,
+        # including v=0 joints.  Placeholder instances contribute no loss.
+        visibility_valid = instance_valid[:, None].expand_as(visible)
+        visibility_count = visibility_valid.sum().clamp(min=1).to(src_vis_logits.dtype)
         target_vis = visible.to(src_vis_logits.dtype)
         vis_loss = F.binary_cross_entropy_with_logits(src_vis_logits, target_vis, reduction='none')
-        vis_loss = (vis_loss * valid.to(vis_loss.dtype)).sum() / valid_count
+        vis_loss = (vis_loss * visibility_valid.to(vis_loss.dtype)).sum() / visibility_count
 
-        oks = self._oks(src_keypoints, tgt_keypoints[..., :2], valid, tgt_area)
-        instance_valid = valid.any(dim=1)
-        if instance_valid.any():
-            oks_loss = (1.0 - oks[instance_valid]).sum() / instance_valid.sum().clamp(min=1).to(src_keypoints.dtype)
+        oks = self._oks(src_keypoints, tgt_keypoints[..., :2], coordinate_valid, tgt_area)
+        oks_instance_valid = coordinate_valid.any(dim=1)
+        if oks_instance_valid.any():
+            oks_loss = (1.0 - oks[oks_instance_valid]).sum() / oks_instance_valid.sum().clamp(min=1).to(src_keypoints.dtype)
         else:
             oks_loss = src_keypoints.sum() * 0.0
 
@@ -419,15 +460,29 @@ class ECCriterion(nn.Module):
         # Get the matching union set across all decoder layers.
         if 'aux_outputs' in outputs:
             indices_aux_list, cached_indices, cached_indices_enc = [], [], []
-            aux_outputs_list = outputs['aux_outputs']
-            if 'pre_outputs' in outputs:
-                aux_outputs_list = outputs['aux_outputs'] + [outputs['pre_outputs']]
-            for i, aux_outputs in enumerate(aux_outputs_list):
+            # Decoder auxiliary layers have passed through the keypoint heads,
+            # so pose-aware matching is required for every one of them.
+            for i, aux_outputs in enumerate(outputs['aux_outputs']):
                 indices_aux = self.matcher(aux_outputs, targets)['indices']
                 cached_indices.append(indices_aux)
                 indices_aux_list.append(indices_aux)
+            if 'pre_outputs' in outputs:
+                # pre_outputs is the traditional detection head produced
+                # before decoder keypoint prediction. It intentionally has no
+                # pred_keypoints and must use detection-only matching, just as
+                # its keypoint loss is skipped below.
+                indices_pre = self.matcher(
+                    outputs['pre_outputs'], targets,
+                    use_keypoint_costs=False)['indices']
+                cached_indices.append(indices_pre)
+                indices_aux_list.append(indices_pre)
             for i, aux_outputs in enumerate(outputs['enc_aux_outputs']):
-                indices_enc = self.matcher(aux_outputs, targets)['indices']
+                # Encoder proposals do not pass through the decoder keypoint
+                # heads. Match them with detection costs only; final and
+                # decoder-auxiliary outputs are required to provide
+                # pred_keypoints when pose matcher costs are enabled.
+                indices_enc = self.matcher(
+                    aux_outputs, targets, use_keypoint_costs=False)['indices']
                 cached_indices_enc.append(indices_enc)
                 indices_aux_list.append(indices_enc)
             indices_go = self._get_go_indices(indices, indices_aux_list)

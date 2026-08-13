@@ -17,7 +17,7 @@ import torchvision.transforms.v2.functional as F
 from torchvision.transforms.v2 import InterpolationMode
 
 from ...core import register
-from .._misc import (BoundingBoxes, Image, Mask, SanitizeBoundingBoxes, Video,
+from .._misc import (BoundingBoxes, Image, Mask, Video,
                      _boxes_keys, convert_to_tv_tensor)
 
 torchvision.disable_beta_transforms_warning()
@@ -30,7 +30,6 @@ Resize = register()(T.Resize)
 # ToImageTensor = register()(T.ToImageTensor)
 # ConvertDtype = register()(T.ConvertDtype)
 # PILToTensor = register()(T.PILToTensor)
-SanitizeBoundingBoxes = register(name='SanitizeBoundingBoxes')(SanitizeBoundingBoxes)
 RandomCrop = register()(T.RandomCrop)
 Normalize = register()(T.Normalize)
 
@@ -130,7 +129,7 @@ def _image_size_hw(image):
 
 
 def _filter_target(target, keep):
-    for key in ["boxes", "labels", "area", "iscrowd", "masks", "keypoints", "keypoint_valid"]:
+    for key in ["boxes", "labels", "area", "iscrowd", "masks", "keypoints", "keypoint_valid", "has_keypoints"]:
         if key in target:
             target[key] = target[key][keep]
     return target
@@ -299,8 +298,15 @@ class KeypointRandomHorizontalFlip(nn.Module):
         return image, target
 
 
-@register()
+@register(name='SanitizeBoundingBoxes')
+@register(name='KeypointSanitizeBoundingBoxes')
 class KeypointSanitizeBoundingBoxes(nn.Module):
+    """Filter every per-instance target field with the bbox keep mask.
+
+    This is also registered under the legacy ``SanitizeBoundingBoxes`` name so
+    an older pose config cannot silently filter boxes/labels while leaving
+    custom keypoint tensors unfiltered.
+    """
     def __init__(self, min_size=1):
         super().__init__()
         self.min_size = min_size
@@ -310,8 +316,29 @@ class KeypointSanitizeBoundingBoxes(nn.Module):
         if "boxes" not in target:
             return image, target
         boxes = target["boxes"]
-        keep = (boxes[:, 2] - boxes[:, 0] >= self.min_size) & (boxes[:, 3] - boxes[:, 1] >= self.min_size)
-        return image, _filter_target(target, keep)
+        box_format = getattr(boxes, _boxes_keys[0], 'XYXY')
+        box_format = getattr(box_format, 'value', box_format)
+        spatial_size = getattr(boxes, _boxes_keys[1], _image_size_hw(image))
+        keep = (
+            torch.isfinite(boxes).all(dim=-1)
+            & (boxes[:, 2] - boxes[:, 0] >= self.min_size)
+            & (boxes[:, 3] - boxes[:, 1] >= self.min_size)
+        )
+        target = _filter_target(target, keep)
+        # Boolean indexing is not guaranteed to retain the torchvision
+        # BoundingBoxes subclass/metadata on every supported torchvision
+        # version. ConvertBoxes only transforms BoundingBoxes, so losing this
+        # type would send absolute XYXY pixel coordinates into the criterion.
+        target['boxes'] = convert_to_tv_tensor(
+            target['boxes'], key='boxes', box_format=str(box_format),
+            spatial_size=spatial_size)
+        if 'masks' in target and not isinstance(target['masks'], Mask):
+            target['masks'] = convert_to_tv_tensor(target['masks'], key='masks')
+        return image, target
+
+
+# Public compatibility alias imported by transforms.__init__.
+SanitizeBoundingBoxes = KeypointSanitizeBoundingBoxes
 
 
 @register()
