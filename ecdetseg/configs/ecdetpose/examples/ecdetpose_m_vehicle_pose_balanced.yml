@@ -1,0 +1,18 @@
+# Recommended first experiment: preserve detection quality while giving pose
+# supervision and pose-aware Hungarian matching more influence.
+__include__: ['ecdetpose_m_vehicle_31kpts.yml']
+
+output_dir: outputs/ecdetpose_m_vehicle_pose_balanced
+
+ECCriterion:
+  weight_dict:
+    loss_keypoint: 10
+    loss_oks: 4
+    loss_keypoint_visibility: 1
+  matcher:
+    weight_dict:
+      cost_class: 2
+      cost_bbox: 5
+      cost_giou: 2
+      keypoint_cost_weight: 2
+      oks_cost_weight: 0

@@ -24,20 +24,20 @@ def register(dct :Any=GLOBAL_CONFIG, name=None, force=False):
         register_name = foo.__name__ if name is None else name
         if not force:
             if inspect.isclass(dct):
-                assert not hasattr(dct, foo.__name__), \
-                    f'module {dct.__name__} has {foo.__name__}'
+                assert not hasattr(dct, register_name), \
+                    f'module {dct.__name__} has {register_name}'
             else:
-                assert foo.__name__ not in dct, \
-                f'{foo.__name__} has been already registered'
+                assert register_name not in dct, \
+                    f'{register_name} has been already registered'
 
         if inspect.isfunction(foo):
             @functools.wraps(foo)
             def wrap_func(*args, **kwargs):
                 return foo(*args, **kwargs)
             if isinstance(dct, dict):
-                dct[foo.__name__] = wrap_func
+                dct[register_name] = wrap_func
             elif inspect.isclass(dct):
-                setattr(dct, foo.__name__, wrap_func)
+                setattr(dct, register_name, wrap_func)
             else:
                 raise AttributeError('')
             return wrap_func
@@ -87,6 +87,33 @@ def extract_schema(module: type):
         schame['_kwargs'][name] = value
 
     return schame
+
+
+
+def _create_from_injected_config(cfg, global_cfg):
+    """Instantiate one inline injected config without sharing its overrides."""
+    if 'type' not in cfg:
+        raise ValueError('Missing inject for `type` style.')
+    type_name = str(cfg['type'])
+    if type_name not in global_cfg:
+        raise ValueError(f'Missing {type_name} in inspect stage.')
+
+    # ``create`` historically mutates registry schemas while resolving inline
+    # configs. Save and restore the schema so a list can safely contain several
+    # instances of the same dataset type with different paths.
+    schema = global_cfg[type_name]
+    saved = schema.copy()
+    try:
+        keys = [key for key in schema if not key.startswith('_')]
+        for key in keys:
+            del schema[key]
+        schema.update(schema['_kwargs'])
+        schema.update(cfg)
+        name = schema.pop('type')
+        return create(name, global_cfg)
+    finally:
+        schema.clear()
+        schema.update(saved)
 
 
 def create(type_or_name, global_cfg=GLOBAL_CONFIG, **kwargs):
@@ -147,22 +174,13 @@ def create(type_or_name, global_cfg=GLOBAL_CONFIG, **kwargs):
                 module_kwargs[k] = _cfg
 
         elif isinstance(_k, dict):
-            if 'type' not in _k.keys():
-                raise ValueError('Missing inject for `type` style.')
+            module_kwargs[k] = _create_from_injected_config(_k, global_cfg)
 
-            _type = str(_k['type'])
-            if _type not in global_cfg:
-                raise ValueError(f'Missing {_type} in inspect stage.')
-
-            _cfg: dict = global_cfg[_type]
-            # clean args
-            _keys = [k for k in _cfg.keys() if not k.startswith('_')]
-            for _arg in _keys:
-                del _cfg[_arg]
-            _cfg.update(_cfg['_kwargs']) # restore default values
-            _cfg.update(_k) # load config args
-            name = _cfg.pop('type') # pop extra key (`type` from _k)
-            module_kwargs[k] = create(name, global_cfg)
+        elif isinstance(_k, list):
+            module_kwargs[k] = [
+                _create_from_injected_config(item, global_cfg) if isinstance(item, dict) else item
+                for item in _k
+            ]
 
         else:
             raise ValueError(f'Inject does not support {_k}')
