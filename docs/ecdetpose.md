@@ -556,6 +556,15 @@ python ecdetseg/tools/deployment/export_onnx.py \
   --check
 ```
 
+When `--resume` is supplied, the exporter reads `num_classes` from the
+checkpoint classification heads **before** constructing the model. This lets a
+multi-class checkpoint be exported even if the referenced vehicle example has
+`num_classes: 1`. For example, a checkpoint whose score-head weights have shape
+`[5, hidden_dim]` is exported as a five-class model. You can add
+`--num-classes 5` as an explicit assertion; the exporter rejects it if it does
+not match the checkpoint. The export config must still match the checkpoint's
+S/M architecture, decoder depth/dimensions, and keypoint-head settings.
+
 An ECDetPose graph has five named outputs: `labels`, `boxes`, `scores`,
 `keypoints`, and `keypoint_scores`. `orig_target_sizes` uses `[width, height]`,
 whereas `eval_spatial_size` uses `[height, width]`; the exporter performs this

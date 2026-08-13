@@ -20,23 +20,74 @@ import torch.nn as nn
 from engine.core import YAMLConfig
 
 
+def _checkpoint_state(checkpoint):
+    if 'ema' in checkpoint:
+        return checkpoint['ema']['module']
+    if 'model' in checkpoint:
+        return checkpoint['model']
+    return checkpoint
+
+
+def _infer_num_classes(state):
+    """Infer the trained class count from an ECDet/ECDetPose checkpoint."""
+    suffixes = (
+        'decoder.enc_score_head.weight',
+        'decoder.dec_score_head.0.weight',
+    )
+    values = {
+        int(tensor.shape[0])
+        for name, tensor in state.items()
+        if any(name.endswith(suffix) for suffix in suffixes)
+    }
+    if not values:
+        raise ValueError(
+            'Could not infer num_classes from the checkpoint score heads. '
+            'Pass --num-classes explicitly.')
+    if len(values) != 1:
+        raise ValueError(
+            f'Checkpoint score heads disagree about num_classes: {sorted(values)}')
+    return values.pop()
+
+
 def main(args, ):
     """main
     """
-    cfg = YAMLConfig(args.config, resume=args.resume)
+    checkpoint = None
+    state = None
+    num_classes = args.num_classes
+    if args.resume:
+        checkpoint = torch.load(args.resume, map_location='cpu')
+        state = _checkpoint_state(checkpoint)
+        checkpoint_num_classes = _infer_num_classes(state)
+        if num_classes is not None and num_classes != checkpoint_num_classes:
+            raise ValueError(
+                f'--num-classes={num_classes} does not match the checkpoint '
+                f'class-head size ({checkpoint_num_classes}).')
+        num_classes = checkpoint_num_classes
+
+    cfg_kwargs = {'resume': args.resume}
+    if num_classes is not None:
+        # Override the example config before cfg.model is constructed. This is
+        # required when a generic one-class vehicle example is used to export
+        # a checkpoint trained with multiple vehicle classes.
+        cfg_kwargs['num_classes'] = num_classes
+    cfg = YAMLConfig(args.config, **cfg_kwargs)
     
     task = cfg.yaml_cfg['task']
 
     if args.resume:
         cfg.yaml_cfg['ViTAdapter']['skip_load_backbone'] = True
-        checkpoint = torch.load(args.resume, map_location='cpu')
-        if 'ema' in checkpoint:
-            state = checkpoint['ema']['module']
-        else:
-            state = checkpoint['model']
 
         # NOTE load train mode state -> convert to deploy mode
-        cfg.model.load_state_dict(state)
+        try:
+            cfg.model.load_state_dict(state)
+        except RuntimeError as error:
+            raise RuntimeError(
+                'Checkpoint architecture does not match the export config. '
+                f'The checkpoint uses num_classes={num_classes}; ensure the '
+                'config also matches its S/M backbone, decoder dimensions, '
+                'number of decoder layers, and keypoint-head settings.\n'
+                f'Original load error:\n{error}') from error
 
     else:
         # raise AttributeError('Only support resume to load model.state_dict by now.')
@@ -118,6 +169,9 @@ if __name__ == '__main__':
     parser.add_argument('--config', '-c', default='configs/dfine/dfine_hgnetv2_l_coco.yml', type=str, )
     parser.add_argument('--resume', '-r', type=str, )
     parser.add_argument('--opset', type=int, default=18,)
+    parser.add_argument(
+        '--num-classes', type=int,
+        help='Model class count. With --resume it is inferred from the checkpoint and this option only validates it.')
     parser.add_argument('--check',  action='store_true')
     parser.add_argument('--simplify',  action='store_true')
     args = parser.parse_args()

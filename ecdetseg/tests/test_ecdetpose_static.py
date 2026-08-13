@@ -435,3 +435,6 @@ def test_onnx_export_names_pose_outputs_and_uses_width_height_order():
     assert 'anchors = anchors.expand(memory.shape[0], -1, -1)' in decoder
     assert 'for i in range(len(self.dec_keypoint_xy_head))' in decoder
     assert 'resize_H = int(H_c * scale)' not in backbone
+    assert 'checkpoint_num_classes = _infer_num_classes(state)' in exporter
+    assert "cfg_kwargs['num_classes'] = num_classes" in exporter
+    assert "'decoder.enc_score_head.weight'" in exporter
