@@ -473,7 +473,17 @@ class ViTAdapter(nn.Module):
 
     
     def forward(self, x):
-        
+        input_h, input_w = x.shape[-2:]
+        if input_h % self.patch_size or input_w % self.patch_size:
+            suggested_h = math.ceil(input_h / self.patch_size) * self.patch_size
+            suggested_w = math.ceil(input_w / self.patch_size) * self.patch_size
+            raise ValueError(
+                'ViTAdapter input height and width must be divisible by '
+                f'patch_size={self.patch_size}, but received '
+                f'[height={input_h}, width={input_w}]. Use '
+                f'[height={suggested_h}, width={suggested_w}] or another '
+                'divisible resolution. Configuration sizes use [height, width].')
+
         H_c, W_c = x.shape[2] // self.patch_size, x.shape[3] // self.patch_size
         bs = x.shape[0]
 
@@ -485,10 +495,23 @@ class ViTAdapter(nn.Module):
         proj_feats = []
         fused_feats = fused_feats.transpose(1, 2).contiguous().view(bs, -1, H_c, W_c)  # [B, D, H, W]
         for i in range(self.num_levels):
-            scale = 2 ** (1 - i)
-            resize_H = int(H_c * scale)
-            resize_W = int(W_c * scale)
-            feature = F.interpolate(fused_feats, size=[resize_H, resize_W], mode="bilinear", align_corners=False)
+            # Keep shape arithmetic symbolic while tracing/exporting. Casting
+            # H_c/W_c to Python integers freezes the traced resolution and
+            # emits TracerWarning. These levels only use powers of two, so
+            # integer multiply/divide expresses the same sizes without a
+            # Tensor -> Python conversion.
+            if i == 0:
+                resize_shape = (H_c * 2, W_c * 2)
+            elif i == 1:
+                resize_shape = (H_c, W_c)
+            else:
+                divisor = 2 ** (i - 1)
+                resize_shape = (H_c // divisor, W_c // divisor)
+            feature = F.interpolate(
+                fused_feats,
+                size=resize_shape,
+                mode="bilinear",
+                align_corners=False)
             proj_feats.append(feature)
             
         if len(self.projector) == 1:

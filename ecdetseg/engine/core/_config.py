@@ -75,6 +75,10 @@ class BaseConfig(object):
 
         self.seed :int = None
         self.print_freq :int = None
+        self.train_gt_visualization_interval :int = 0
+        self.train_gt_visualization_images :int = 1
+        self.matcher_debug_interval :int = 0
+        self.matcher_debug_images :int = 2
         self.checkpoint_freq :int = 1
         self.output_dir :str = None
         self.summary_dir :str = None
