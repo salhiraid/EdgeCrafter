@@ -50,6 +50,31 @@ def _infer_num_classes(state):
     return values.pop()
 
 
+def _load_export_state(model, state):
+    """Load learned weights while regenerating resolution-derived buffers."""
+    derived_buffer_suffixes = (
+        'decoder.anchors',
+        'decoder.valid_mask',
+    )
+    filtered_state = {
+        name: tensor
+        for name, tensor in state.items()
+        if not any(name.endswith(suffix)
+                   for suffix in derived_buffer_suffixes)
+    }
+    incompatible = model.load_state_dict(filtered_state, strict=False)
+    invalid_missing = [
+        name for name in incompatible.missing_keys
+        if not any(name.endswith(suffix)
+                   for suffix in derived_buffer_suffixes)
+    ]
+    if invalid_missing or incompatible.unexpected_keys:
+        raise RuntimeError(
+            'Checkpoint contains incompatible learned parameters. '
+            f'Missing keys: {invalid_missing}; unexpected keys: '
+            f'{list(incompatible.unexpected_keys)}')
+
+
 def main(args, ):
     """main
     """
@@ -92,7 +117,10 @@ def main(args, ):
 
         # NOTE load train mode state -> convert to deploy mode
         try:
-            cfg.model.load_state_dict(state)
+            # Anchors and valid_mask depend only on eval_spatial_size. Do not
+            # restore their training-resolution copies from the checkpoint;
+            # retain the freshly generated buffers for the requested export.
+            _load_export_state(cfg.model, state)
         except RuntimeError as error:
             raise RuntimeError(
                 'Checkpoint architecture does not match the export config. '

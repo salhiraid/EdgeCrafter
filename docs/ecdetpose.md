@@ -575,6 +575,12 @@ the requested ONNX resolution. Both dimensions must be divisible by the ViT
 patch size `16`; `544 × 960` also satisfies the recommended divisibility by
 `32`.
 
+Checkpoint `decoder.anchors` and `decoder.valid_mask` entries are derived from
+the training resolution rather than learned parameters. The exporter therefore
+does not restore those two buffers: it retains the fresh versions generated for
+`--input-size`. This permits exporting a checkpoint trained at `640 × 640` as a
+fixed `544 × 960` graph without weakening strict validation of learned weights.
+
 When `--resume` is supplied, the exporter reads `num_classes` from the
 checkpoint classification heads **before** constructing the model. This lets a
 multi-class checkpoint be exported even if the referenced vehicle example has

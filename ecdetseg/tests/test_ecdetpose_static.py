@@ -443,6 +443,9 @@ def test_onnx_export_names_pose_outputs_and_uses_width_height_order():
     assert "export_kwargs['dynamo'] = args.dynamo" in exporter
     assert "cfg_kwargs['eval_spatial_size'] = [input_h, input_w]" in exporter
     assert "metavar=('HEIGHT', 'WIDTH')" in exporter
+    assert "'decoder.anchors'" in exporter
+    assert "'decoder.valid_mask'" in exporter
+    assert '_load_export_state(cfg.model, state)' in exporter
     assert "half = layer_boxes.new_tensor(0.5)" in decoder
     assert "0.5 * layer_boxes[..., 2:]" not in decoder
 
