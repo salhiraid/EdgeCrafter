@@ -703,7 +703,12 @@ class ECTransformer(nn.Module):
                            denoising_bbox_unact=None):
 
         # prepare input for decoder
-        if self.training or self.eval_spatial_size is None:
+        expected_anchor_count = sum(h * w for h, w in spatial_shapes)
+        cached_anchors_match = (
+            hasattr(self, 'anchors')
+            and self.anchors.shape[1] == expected_anchor_count)
+        if (self.training or self.eval_spatial_size is None
+                or not cached_anchors_match):
             anchors, valid_mask = self._generate_anchors(spatial_shapes, device=memory.device)
         else:
             anchors = self.anchors

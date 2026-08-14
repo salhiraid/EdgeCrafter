@@ -473,7 +473,17 @@ class ViTAdapter(nn.Module):
 
     
     def forward(self, x):
-        
+        input_h, input_w = x.shape[-2:]
+        if input_h % self.patch_size or input_w % self.patch_size:
+            suggested_h = math.ceil(input_h / self.patch_size) * self.patch_size
+            suggested_w = math.ceil(input_w / self.patch_size) * self.patch_size
+            raise ValueError(
+                'ViTAdapter input height and width must be divisible by '
+                f'patch_size={self.patch_size}, but received '
+                f'[height={input_h}, width={input_w}]. Use '
+                f'[height={suggested_h}, width={suggested_w}] or another '
+                'divisible resolution. Configuration sizes use [height, width].')
+
         H_c, W_c = x.shape[2] // self.patch_size, x.shape[3] // self.patch_size
         bs = x.shape[0]
 

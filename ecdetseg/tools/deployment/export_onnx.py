@@ -72,6 +72,17 @@ def main(args, ):
         # required when a generic one-class vehicle example is used to export
         # a checkpoint trained with multiple vehicle classes.
         cfg_kwargs['num_classes'] = num_classes
+    if args.input_size is not None:
+        input_h, input_w = args.input_size
+        if input_h <= 0 or input_w <= 0:
+            raise ValueError('--input-size dimensions must be positive.')
+        if input_h % 16 or input_w % 16:
+            raise ValueError(
+                '--input-size uses HEIGHT WIDTH and both dimensions must be '
+                f'divisible by the ViT patch size 16; got {input_h} {input_w}.')
+        # Apply this before constructing the model so HybridEncoder positional
+        # embeddings and ECTransformer anchors are cached for the export size.
+        cfg_kwargs['eval_spatial_size'] = [input_h, input_w]
     cfg = YAMLConfig(args.config, **cfg_kwargs)
     
     task = cfg.yaml_cfg['task']
@@ -182,6 +193,9 @@ if __name__ == '__main__':
     parser.add_argument('--config', '-c', default='configs/dfine/dfine_hgnetv2_l_coco.yml', type=str, )
     parser.add_argument('--resume', '-r', type=str, )
     parser.add_argument('--opset', type=int, default=18,)
+    parser.add_argument(
+        '--input-size', type=int, nargs=2, metavar=('HEIGHT', 'WIDTH'),
+        help='Override eval_spatial_size for this export, e.g. --input-size 544 960.')
     parser.add_argument(
         '--num-classes', type=int,
         help='Model class count. With --resume it is inferred from the checkpoint and this option only validates it.')

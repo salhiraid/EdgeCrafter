@@ -556,6 +556,25 @@ python ecdetseg/tools/deployment/export_onnx.py \
   --check
 ```
 
+To export a graph whose input is **960 pixels wide and 544 pixels high**, pass
+the CLI dimensions in `HEIGHT WIDTH` order:
+
+```bash
+python ecdetseg/tools/deployment/export_onnx.py \
+  --config ecdetseg/configs/ecdetpose/examples/ecdetpose_m_vehicle_31kpts.yml \
+  --resume /path/to/best.pth \
+  --input-size 544 960 \
+  --opset 18 \
+  --check \
+  --simplify
+```
+
+`--input-size` overrides `eval_spatial_size` before model construction. The
+encoder positional embeddings and decoder anchors are therefore created for
+the requested ONNX resolution. Both dimensions must be divisible by the ViT
+patch size `16`; `544 × 960` also satisfies the recommended divisibility by
+`32`.
+
 When `--resume` is supplied, the exporter reads `num_classes` from the
 checkpoint classification heads **before** constructing the model. This lets a
 multi-class checkpoint be exported even if the referenced vehicle example has
@@ -596,3 +615,49 @@ The bbox-relative pose decoder also represents its `0.5` factor as a tensor
 constant, which is portable across both exporters. Use `--dynamo` only when the
 installed PyTorch/ONNX stack supports the entire graph; it is not required for
 a valid pose export.
+
+### Rectangular input resolution
+
+All configuration and transform sizes use `[height, width]`, not
+`[width, height]`. For 960-pixel-wide 16:9 input, use `[544, 960]` rather than
+`[960, 540]`: `540` is not divisible by the ViT patch size (`16`), while `544`
+is. The adapter now rejects non-aligned input with a direct error and suggests
+the next valid dimensions instead of failing later with an opaque tensor reshape
+error. You do not need to keep `640 × 640`; rectangular training is supported
+when both dimensions are divisible by 16. For the cleanest feature pyramid and
+deployment behavior, dimensions divisible by 32 are recommended.
+
+The training resize must match the model resolution, for example:
+
+```yaml
+eval_spatial_size: [544, 960]
+
+train_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {type: ResizeWithKeypoints, size: [544, 960]}
+        # remaining pose-aware transforms...
+
+val_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {type: ResizeWithKeypoints, size: [544, 960]}
+        # remaining validation transforms...
+```
+
+`ResizeWithKeypoints` applies the same horizontal and vertical resize factors to
+the image, bboxes, and keypoint coordinates, so rectangular resizing preserves
+their alignment. It may change image aspect ratio if the source ratio differs;
+use training-GT visualizations to confirm whether that geometric distortion is
+acceptable for the dataset.
+
+The encoder and decoder cache positional embeddings and anchors for
+`eval_spatial_size`. Evaluation now verifies those caches against the actual
+feature-map token count and rebuilds them when the validation transform uses a
+different resolution. This prevents token errors such as `510` image features
+versus `400` cached positional tokens. Nevertheless, using the same resolution
+for `eval_spatial_size` and the validation `ResizeWithKeypoints` is strongly
+recommended because it avoids repeated rebuilding and ensures that reported
+metrics correspond to the intended deployment resolution.

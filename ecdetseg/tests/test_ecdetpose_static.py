@@ -441,5 +441,23 @@ def test_onnx_export_names_pose_outputs_and_uses_width_height_order():
     assert "cfg_kwargs['num_classes'] = num_classes" in exporter
     assert "'decoder.enc_score_head.weight'" in exporter
     assert "export_kwargs['dynamo'] = args.dynamo" in exporter
+    assert "cfg_kwargs['eval_spatial_size'] = [input_h, input_w]" in exporter
+    assert "metavar=('HEIGHT', 'WIDTH')" in exporter
     assert "half = layer_boxes.new_tensor(0.5)" in decoder
     assert "0.5 * layer_boxes[..., 2:]" not in decoder
+
+
+def test_vit_adapter_rejects_non_patch_aligned_rectangular_inputs():
+    backbone = (ROOT / 'engine/edgecrafter/ecvit.py').read_text()
+    assert 'input_h % self.patch_size or input_w % self.patch_size' in backbone
+    assert "Configuration sizes use [height, width]" in backbone
+    assert 'math.ceil(input_w / self.patch_size) * self.patch_size' in backbone
+
+
+def test_eval_rebuilds_resolution_dependent_position_data_when_needed():
+    encoder = (ROOT / 'engine/edgecrafter/hybrid_encoder.py').read_text()
+    decoder = (ROOT / 'engine/edgecrafter/decoder.py').read_text()
+    assert 'cached_pos_embed.shape[1] != h * w' in encoder
+    assert 'self.build_2d_sincos_position_embedding(' in encoder
+    assert 'self.anchors.shape[1] == expected_anchor_count' in decoder
+    assert 'or not cached_anchors_match' in decoder
